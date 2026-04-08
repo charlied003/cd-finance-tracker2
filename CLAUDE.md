@@ -34,7 +34,7 @@ Latest stable version. Single JSX file, compiled to HTML via esbuild.
 ### Key Technical Details
 - Storage key: "finance-tracker-v5" — DO NOT CHANGE (wipes user data)
 - Single JSX file, no build process needed for development
-- Compiled to HTML via: esbuild --jsx=transform --jsx-factory=React.createElement --target=es2015
+- Compiled to HTML via: node build.js [version] (e.g. node build.js 2.1)
 - Monzo CSV: "money out" values are already negative — use Math.abs() before negating
 - Starling CSV: tab-separated, has balance column
 - Pay cycle functions: getPeriodKey(), getPeriodEnd(), getPeriodLabel()
@@ -61,8 +61,9 @@ Latest stable version. Single JSX file, compiled to HTML via esbuild.
 ## File Structure
 ```
 finance-tracker/
-├── index.html              # Compiled app (open this in browser)
+├── index.html              # Compiled app — served by GitHub Pages
 ├── app.jsx                 # Source — edit this
+├── build.js                # Build script: node build.js [version]
 ├── CLAUDE.md               # This file
 └── versions/
     ├── finance-tracker-v1.9.5.jsx
@@ -80,7 +81,8 @@ finance-tracker/
 - v1.7 — publish version
 - v1.8 — Insights tab, notes, merchant transaction drill-down
 - v1.9 — all features stable
-- v1.9.5 — receipt scanning, item drill-down in spending tab ← CURRENT
+- v1.9.5 — receipt scanning, item drill-down in spending tab
+- v2.1 — GitHub Gist sync (merchant rules + receipts across devices) ← CURRENT
 
 ## Important Rules
 - Never change storage key "finance-tracker-v5"

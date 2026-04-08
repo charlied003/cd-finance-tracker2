@@ -1,3 +1,7 @@
+# Build temp files
+_build_temp.jsx
+_build_bundle.js
+
 # Bank statements & receipt photos — keep off GitHub
 *.csv
 *.tsv

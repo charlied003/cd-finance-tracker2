@@ -295,6 +295,53 @@ function matchReceiptToTransaction(extracted, transactions) {
     .slice(0, 5);
 }
 
+// ─── GitHub Gist Sync ────────────────────────────────────────────────────────
+const GIST_FILE      = "finance-tracker-sync.json";
+const GIST_TOKEN_KEY = "finance-tracker-gist-token";
+const GIST_ID_KEY    = "finance-tracker-gist-id";
+
+async function gistFetch(token, gistId) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
+  });
+  if (!res.ok) throw new Error(`Gist fetch failed: ${res.status}`);
+  const j = await res.json();
+  const content = j.files?.[GIST_FILE]?.content;
+  if (!content) throw new Error("No sync file in gist");
+  return JSON.parse(content);
+}
+
+async function gistSave(token, gistId, data) {
+  const body = { files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } } };
+  if (gistId) {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: "PATCH",
+      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`Gist update failed: ${res.status}`);
+    return gistId;
+  } else {
+    const res = await fetch("https://api.github.com/gists", {
+      method: "POST",
+      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, description: "Finance Tracker Sync", public: false })
+    });
+    if (!res.ok) throw new Error(`Gist create failed: ${res.status}`);
+    const j = await res.json();
+    return j.id;
+  }
+}
+
+async function gistFindExisting(token) {
+  const res = await fetch("https://api.github.com/gists?per_page=100", {
+    headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
+  });
+  if (!res.ok) return null;
+  const list = await res.json();
+  return list.find(g => g.files?.[GIST_FILE]) || null;
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -314,6 +361,11 @@ export default function App() {
   const [apiKey, setApiKey]                 = useState("");
   const [receipts, setReceipts]             = useState({});
   const [receiptModal, setReceiptModal]     = useState(null);
+  const [gistToken, setGistToken]           = useState("");
+  const [gistId, setGistId]                 = useState("");
+  const [syncStatus, setSyncStatus]         = useState("idle"); // "idle"|"syncing"|"synced"|"error"
+  const syncTimer                           = useRef(null);
+  const syncReady                           = useRef(false);
   const fileRef     = useRef();
   const receiptRef  = useRef();
 
@@ -350,6 +402,27 @@ const DEFAULT_RULES = {
         if (s.apiKey)         setApiKey(s.apiKey);
         if (s.receipts)       setReceipts(s.receipts);
       }
+      // Load Gist credentials (stored separately, never exported)
+      const tok = localStorage.getItem(GIST_TOKEN_KEY) || "";
+      const gid = localStorage.getItem(GIST_ID_KEY) || "";
+      if (tok) setGistToken(tok);
+      if (gid) setGistId(gid);
+      // Fetch from Gist and merge (remote wins for rules + receipts)
+      if (tok && gid) {
+        try {
+          setSyncStatus("syncing");
+          const remote = await gistFetch(tok, gid);
+          if (remote.merchantRules) setMerchantRules(r => ({ ...r, ...remote.merchantRules }));
+          if (remote.receipts)      setReceipts(r => ({ ...r, ...remote.receipts }));
+          if (remote.accounts)      setAccounts(remote.accounts);
+          if (remote.cycleStart)    setCycleStart(remote.cycleStart);
+          setSyncStatus("synced");
+        } catch(e) {
+          console.warn("Gist load failed:", e);
+          setSyncStatus("error");
+        }
+      }
+      syncReady.current = true;
     };
     load();
   }, []);
@@ -359,6 +432,27 @@ const DEFAULT_RULES = {
     try { localStorage.setItem(STORAGE_KEY, data); } catch {}
     if (window.storage) window.storage.set(STORAGE_KEY, data).catch(()=>{});
   }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey]);
+
+  // Debounced Gist sync — fires 2s after any change to syncable data
+  useEffect(() => {
+    if (!syncReady.current || !gistToken) return;
+    setSyncStatus("syncing");
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(async () => {
+      try {
+        const data = { version: "2.1", merchantRules, receipts, accounts, cycleStart };
+        const newId = await gistSave(gistToken, gistId, data);
+        if (newId !== gistId) {
+          setGistId(newId);
+          localStorage.setItem(GIST_ID_KEY, newId);
+        }
+        setSyncStatus("synced");
+      } catch(e) {
+        console.warn("Gist sync failed:", e);
+        setSyncStatus("error");
+      }
+    }, 2000);
+  }, [merchantRules, receipts, accounts, cycleStart, gistToken, gistId]);
 
   // ── Derived ──
   const periods       = getAllPeriods(transactions, cycleStart);
@@ -503,7 +597,9 @@ root.render(React.createElement(App));
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setModal({type:"rules"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>RULES</button>
             <button onClick={exportHTML} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>↓ HTML</button>
-            <button onClick={()=>setModal({type:"settings"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>⚙</button>
+            <button onClick={()=>setModal({type:"settings"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>
+              ⚙{gistToken&&<span style={{fontSize:8,marginLeft:4,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24",verticalAlign:"middle"}}>{syncStatus==="syncing"?"⟳":"●"}</span>}
+            </button>
             <button onClick={()=>setModal({type:"import"})} style={{background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ CSV</button>
           </div>
         </div>
@@ -582,7 +678,22 @@ root.render(React.createElement(App));
         )}
       </div>
 
-      {modal?.type==="settings"  && <SettingsModal cycleStart={cycleStart} apiKey={apiKey} onApiKeySave={setApiKey} onSave={v=>{setCycleStart(v);setSelectedPeriod(null);setComparePeriod(null);setModal(null);showToast(`Pay cycle: ${ordinal(v)} of month`);}} onClose={()=>setModal(null)} />}
+      {modal?.type==="settings"  && <SettingsModal cycleStart={cycleStart} apiKey={apiKey} onApiKeySave={setApiKey}
+          gistToken={gistToken} syncStatus={syncStatus}
+          onGistTokenSave={async tok=>{
+            const trimmed=tok.trim();
+            setGistToken(trimmed);
+            localStorage.setItem(GIST_TOKEN_KEY, trimmed);
+            if (trimmed) {
+              setSyncStatus("syncing");
+              try {
+                const existing = await gistFindExisting(trimmed);
+                if (existing) { setGistId(existing.id); localStorage.setItem(GIST_ID_KEY, existing.id); showToast("Sync connected — existing data found"); }
+                else { showToast("Sync ready — will create gist on next save"); }
+              } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
+            } else { setGistId(""); localStorage.removeItem(GIST_ID_KEY); setSyncStatus("idle"); }
+          }}
+          onSave={v=>{setCycleStart(v);setSelectedPeriod(null);setComparePeriod(null);setModal(null);showToast(`Pay cycle: ${ordinal(v)} of month`);}} onClose={()=>setModal(null)} />}
       {modal?.type==="import"    && <ImportModal importState={importState} setImportState={setImportState} accounts={accounts} fileRef={fileRef} onFile={handleCSVFile} onAI={runAICategorise} onConfirm={confirmImport} onClose={()=>{setModal(null);setImportState({step:"upload",accountId:"",rows:[],preview:[],isMonzo:false});}} loading={loading} onClearAccount={(id)=>{setTransactions(prev=>prev.filter(t=>t.accountId!==id));showToast("Cleared");}} />}
       {modal?.type==="addAccount"&& <AddAccountModal onSave={a=>{setAccounts(prev=>[...prev,a]);setActiveAccounts(prev=>[...prev,a.id]);setModal(null);showToast("Account added");}} onClose={()=>setModal(null)} />}
       {modal?.type==="rules"     && <RulesModal merchantRules={merchantRules} setMerchantRules={setMerchantRules} onClose={()=>setModal(null)} />}
@@ -1054,10 +1165,12 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus}) {
   const [val,setVal]=useState(cycleStart);
   const [keyInput,setKeyInput]=useState(apiKey||"");
   const [keyVisible,setKeyVisible]=useState(false);
+  const [gistInput,setGistInput]=useState(gistToken||"");
+  const [gistVisible,setGistVisible]=useState(false);
   const days=Array.from({length:28},(_,i)=>i+1);
   const endDay=val===1?31:val-1;
   return (
@@ -1076,6 +1189,21 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave}) {
           </div>
           <button onClick={()=>onApiKeySave(keyInput.trim())} style={{width:"100%",background:keyInput?"#fbbf24":"#1c1f2e",border:"none",color:keyInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:keyInput?"pointer":"default",letterSpacing:1}}>SAVE KEY</button>
           {apiKey&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Key saved</div>}
+        </div>
+        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
+          <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>GITHUB SYNC</div>
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>
+            Syncs merchant rules &amp; receipts across devices via a private GitHub Gist.
+            Create a token at <span style={{color:"#94a3b8"}}>github.com → Settings → Developer settings → Personal access tokens</span> with <strong style={{color:"#94a3b8"}}>gist</strong> scope only.
+          </div>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <input type={gistVisible?"text":"password"} value={gistInput} onChange={e=>setGistInput(e.target.value)} placeholder="ghp_..." style={{flex:1,background:"#1c1f2e",border:`1.5px solid ${gistInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none"}}/>
+            <button onClick={()=>setGistVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{gistVisible?"Hide":"Show"}</button>
+          </div>
+          <button onClick={()=>onGistTokenSave(gistInput)} style={{width:"100%",background:gistInput?"#60a5fa":"#1c1f2e",border:"none",color:gistInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:gistInput?"pointer":"default",letterSpacing:1}}>SAVE &amp; CONNECT</button>
+          {gistToken&&<div style={{fontSize:10,marginTop:6,textAlign:"center",color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24"}}>
+            {syncStatus==="synced"?"✓ Synced":syncStatus==="error"?"✗ Sync error — check token":"⟳ Syncing..."}
+          </div>}
         </div>
         <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>PAY CYCLE</div>
         <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>
