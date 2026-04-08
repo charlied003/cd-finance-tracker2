@@ -1,11 +1,5 @@
 # Finance Tracker — Project Context
 
-## About Me
-- Name: Charlie Devine
-- Based in Northern Ireland, commutes to Belfast occasionally
-- Work: Actuarial/insurance pricing role — Polars, Python, GLMs, AWS EC2, WTW Emblem
-- Personal: Recreational bodybuilder, currently managing hip/lower back injury from August 2023
-
 ## Project Overview
 A personal finance tracking web app built in React/JSX. Currently runs as a standalone HTML file and Claude.ai artifact. Next step is migrating to GitHub Pages for proper hosting, live bank API sync, and full AI functionality.
 
