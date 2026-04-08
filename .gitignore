@@ -1,0 +1,13 @@
+# Bank statements & receipt photos — keep off GitHub
+*.csv
+*.tsv
+*.png
+*.jpg
+*.jpeg
+
+# Old standalone versioned files at root (kept in versions/ instead)
+/finance-tracker-v*.html
+/finance-tracker-v*.jsx
+
+# Keep versions/ folder tracked
+!versions/
