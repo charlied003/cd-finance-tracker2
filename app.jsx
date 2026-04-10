@@ -844,24 +844,31 @@ root.render(React.createElement(App));
     if (bankSyncing) return;
     setBankSyncing(true);
     let monzoCount = 0, starlingCount = 0;
+    let finalMsg = null, finalType = "success";
     try {
       if (starlingToken) {
         try {
           const { accountUid, categoryUid } = await starlingGetAccount(starlingToken);
+          console.log("[Starling] account", accountUid, "category", categoryUid);
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate
             ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
             : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+          console.log("[Starling] fetching since", since);
           const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
-          if (!raw.length) { showToast("Starling: API returned 0 items", "error"); }
-          else {
+          console.log("[Starling] raw items", raw.length, raw[0]);
+          if (!raw.length) {
+            finalMsg = "Starling: API returned 0 items — check token permissions";
+            finalType = "error";
+          } else {
             const existingIds = new Set(transactions.map(t => t.id));
             const converted = raw.map((item, i) => starlingToInternal(item, i));
             const nonNull = converted.filter(t => t !== null);
             const fresh = nonNull.filter(t => !existingIds.has(t.id));
+            console.log("[Starling] converted", nonNull.length, "fresh", fresh.length);
             if (!fresh.length) {
-              showToast(`Starling: got ${raw.length} items, ${nonNull.length} non-zero, all already imported`);
+              finalMsg = `Starling: got ${raw.length} items but all already imported`;
             } else {
               starlingCount = fresh.length;
               setTransactions(prev =>
@@ -870,7 +877,9 @@ root.render(React.createElement(App));
             }
           }
         } catch(e) {
-          showToast(`Starling: ${e.message}`, "error");
+          console.error("[Starling] error", e);
+          finalMsg = `Starling: ${e.message}`;
+          finalType = "error";
         }
       }
       if (monzoStatus === "connected") {
@@ -904,6 +913,7 @@ root.render(React.createElement(App));
       if (starlingCount) parts.push(`${starlingCount} from Starling`);
       if (monzoCount) parts.push(`${monzoCount} from Monzo`);
       if (parts.length) showToast(`Synced ${parts.join(", ")}`);
+      else if (finalMsg) showToast(finalMsg, finalType);
       else showToast("Already up to date");
     } finally {
       setBankSyncing(false);
