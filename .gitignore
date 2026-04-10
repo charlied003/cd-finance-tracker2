@@ -1,3 +1,6 @@
+# Local OAuth config — contains client ID, never commit
+config.js
+
 # Build temp files
 _build_temp.jsx
 _build_bundle.js

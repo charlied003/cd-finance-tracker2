@@ -33,6 +33,15 @@ execSync(
 
 const bundle = fs.readFileSync("_build_bundle.js", "utf8");
 
+// Embed config.js if present (contains Monzo clientId — gitignored, never pushed)
+let configScript = "window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled";
+try {
+  configScript = fs.readFileSync("config.js", "utf8");
+  console.log("Embedded config.js (Monzo OAuth enabled)");
+} catch(e) {
+  console.warn("Warning: config.js not found — Monzo OAuth disabled. Copy config.js.template to config.js.");
+}
+
 const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -44,6 +53,7 @@ const html = `<!DOCTYPE html>
 <title>Finance Tracker v${version}</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>${configScript}</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0a0b0f;color:#e2e4ec;font-family:"DM Mono","Courier New",monospace;-webkit-text-size-adjust:100%;}

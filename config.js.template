@@ -1,0 +1,17 @@
+// ─── Monzo OAuth Config ───────────────────────────────────────────────────────
+// Copy this file to config.js and fill in your details.
+// config.js is listed in .gitignore — it will never be committed or pushed.
+//
+// Steps:
+//   1. Go to developers.monzo.com
+//   2. Create a new OAuth client
+//   3. Set Redirect URL to your GitHub Pages URL (below)
+//   4. Set Confidentiality to "Confidential" — but we use PKCE so no secret needed
+//   5. Copy the Client ID here
+//
+// PKCE flow: no client secret is used. The clientId is safe to be in the built HTML.
+
+window.MONZO_CONFIG = {
+  clientId:    "oauth2client_xxxxxxxxxxxxxxxxxxxxxxxx",
+  redirectUri: "https://charlied003.github.io/cd-finance-tracker2/",
+};
