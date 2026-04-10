@@ -412,6 +412,59 @@ function monzoToInternal(tx, idx) {
   };
 }
 
+// ─── Starling Sync ───────────────────────────────────────────────────────────
+
+async function starlingGetAccount(token) {
+  const res = await fetch("https://api.starlingbank.com/api/v2/accounts", {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+  });
+  if (!res.ok) throw new Error(`Starling auth failed (${res.status}) — check your token`);
+  const j = await res.json();
+  const acc = (j.accounts || []).find(a => a.accountType === "PRIMARY");
+  if (!acc) throw new Error("No primary Starling account found");
+  return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
+}
+
+async function starlingFetchTransactions(token, accountUid, categoryUid, since) {
+  const url = `https://api.starlingbank.com/api/v2/feed/account/${accountUid}/category/${categoryUid}?changesSince=${encodeURIComponent(since)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+  });
+  if (!res.ok) throw new Error(`Starling transactions failed (${res.status})`);
+  const j = await res.json();
+  return j.feedItems || [];
+}
+
+function starlingToInternal(item, idx) {
+  const minorUnits = item.amount?.minorUnits || 0;
+  if (minorUnits === 0) return null;
+  const amount = (item.direction === "OUT" ? -1 : 1) * minorUnits / 100;
+  const catKey = (item.spendingCategory || "").toLowerCase().replace(/_/g, " ");
+  const cat = STARLING_CAT_MAP[catKey] || "Other";
+  const ref = (item.reference || "").toLowerCase();
+  const counterParty = (item.counterPartyName || "").toLowerCase();
+  let nativeTransferType = null;
+  if (/easy saver|savings pot|pot transfer/i.test(item.reference || "") || item.spendingCategory === "SAVINGS") {
+    nativeTransferType = "savings";
+  } else if (/grocery allowance/.test(ref) || /charlie devine/.test(counterParty)) {
+    nativeTransferType = "grocery";
+  } else if (/capital one/i.test(item.counterPartyName || "")) {
+    nativeTransferType = "creditcard";
+  }
+  return {
+    id: item.feedItemUid,
+    rowIndex: idx,
+    accountId: "main",
+    date: (item.transactionTime || item.updatedAt || "").slice(0, 10),
+    description: item.counterPartyName || item.reference || "",
+    amount,
+    balance: null,
+    category: cat,
+    nativeCategory: cat,
+    nativeTransferType,
+  };
+}
+
 // ─── GitHub Gist Sync ────────────────────────────────────────────────────────
 const GIST_FILE      = "finance-tracker-sync.json";
 const GIST_TOKEN_KEY = "finance-tracker-gist-token";
@@ -762,6 +815,94 @@ root.render(React.createElement(App));
     }
   }
 
+  async function syncStarling() {
+    if (bankSyncing) return;
+    setBankSyncing(true);
+    try {
+      const { accountUid, categoryUid } = await starlingGetAccount(starlingToken);
+      const existing = transactions.filter(t => t.accountId === "main");
+      const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
+      const since = lastDate
+        ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
+        : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+      const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+      const existingIds = new Set(transactions.map(t => t.id));
+      const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter(t => t && !existingIds.has(t.id));
+      if (!fresh.length) { showToast("Starling — already up to date"); return; }
+      setTransactions(prev =>
+        [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
+      );
+      showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
+    } catch(e) {
+      showToast(e.message, "error");
+    } finally {
+      setBankSyncing(false);
+    }
+  }
+
+  async function syncAll() {
+    if (bankSyncing) return;
+    setBankSyncing(true);
+    let monzoCount = 0, starlingCount = 0;
+    try {
+      if (starlingToken) {
+        try {
+          const { accountUid, categoryUid } = await starlingGetAccount(starlingToken);
+          const existing = transactions.filter(t => t.accountId === "main");
+          const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
+          const since = lastDate
+            ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
+            : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+          const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+          const existingIds = new Set(transactions.map(t => t.id));
+          const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter(t => t && !existingIds.has(t.id));
+          if (fresh.length) {
+            starlingCount = fresh.length;
+            setTransactions(prev =>
+              [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
+            );
+          }
+        } catch(e) {
+          showToast(`Starling: ${e.message}`, "error");
+        }
+      }
+      if (monzoStatus === "connected") {
+        try {
+          const token = await monzoGetValidToken();
+          const accId = await monzoGetAccountId(token);
+          const existing = transactions.filter(t => t.accountId === "grocery" && t.id.startsWith("tx_"));
+          const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
+          const since = lastDate
+            ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
+            : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+          const raw = await monzoFetchTransactions(token, accId, since);
+          const existingIds = new Set(transactions.map(t => t.id));
+          const fresh = raw.map((tx, i) => monzoToInternal(tx, i)).filter(t => t && !existingIds.has(t.id));
+          if (fresh.length) {
+            monzoCount = fresh.length;
+            setTransactions(prev =>
+              [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
+            );
+          }
+        } catch(e) {
+          if (e.message === "REFRESH_FAILED") {
+            setMonzoStatus("expired");
+            showToast("Monzo session expired — reconnect in Settings", "error");
+          } else {
+            showToast(`Monzo: ${e.message}`, "error");
+          }
+        }
+      }
+      const parts = [];
+      if (starlingCount) parts.push(`${starlingCount} from Starling`);
+      if (monzoCount) parts.push(`${monzoCount} from Monzo`);
+      if (parts.length) showToast(`Synced ${parts.join(", ")}`);
+      else showToast("Already up to date");
+    } finally {
+      setBankSyncing(false);
+    }
+  }
+
   async function connectMonzo() {
     try { await monzoStartAuth(); } catch(e) { showToast(e.message, "error"); }
   }
@@ -783,7 +924,7 @@ root.render(React.createElement(App));
             <button onClick={()=>setModal({type:"settings"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>
               ⚙{gistToken&&<span style={{fontSize:8,marginLeft:4,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24",verticalAlign:"middle"}}>{syncStatus==="syncing"?"⟳":"●"}</span>}
             </button>
-            {monzoStatus==="connected"&&<button onClick={syncMonzo} disabled={bankSyncing} style={{background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>{bankSyncing?"⟳":"↓"} SYNC</button>}
+            {(starlingToken||monzoStatus==="connected")&&<button onClick={syncAll} disabled={bankSyncing} style={{background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>{bankSyncing?"⟳":"↓"} SYNC</button>}
             {monzoStatus==="expired"&&<button onClick={()=>setModal({type:"settings"})} style={{background:"#f8717115",border:"1px solid #f8717140",color:"#f87171",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:1}}>⚠ RECONNECT</button>}
             <button onClick={()=>setModal({type:"import"})} style={{background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ CSV</button>
           </div>
@@ -1562,7 +1703,7 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
             <button onClick={()=>setStarlingVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{starlingVisible?"Hide":"Show"}</button>
           </div>
           <button onClick={()=>onStarlingTokenSave(starlingInput)} style={{width:"100%",background:starlingInput?"#60a5fa":"#1c1f2e",border:"none",color:starlingInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:starlingInput?"pointer":"default",letterSpacing:1}}>SAVE TOKEN</button>
-          {starlingToken&&<div style={{fontSize:10,color:"#60a5fa",marginTop:6,textAlign:"center"}}>✓ Token saved — sync coming soon</div>}
+          {starlingToken&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Connected — use ↓ SYNC to fetch transactions</div>}
         </div>
         <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>PAY CYCLE</div>
         <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>

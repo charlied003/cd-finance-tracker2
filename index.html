@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.0</title>
+<title>Finance Tracker v3.1</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -528,6 +528,59 @@ amount = price per single item.` }
       nativeTransferType: tx.category === "transfers" ? "neutral" : null
     };
   }
+  function starlingGetAccount(token) {
+    return __async(this, null, function* () {
+      const res = yield fetch("https://api.starlingbank.com/api/v2/accounts", {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+      });
+      if (!res.ok) throw new Error(`Starling auth failed (${res.status}) \u2014 check your token`);
+      const j = yield res.json();
+      const acc = (j.accounts || []).find((a) => a.accountType === "PRIMARY");
+      if (!acc) throw new Error("No primary Starling account found");
+      return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
+    });
+  }
+  function starlingFetchTransactions(token, accountUid, categoryUid, since) {
+    return __async(this, null, function* () {
+      const url = `https://api.starlingbank.com/api/v2/feed/account/${accountUid}/category/${categoryUid}?changesSince=${encodeURIComponent(since)}`;
+      const res = yield fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+      });
+      if (!res.ok) throw new Error(`Starling transactions failed (${res.status})`);
+      const j = yield res.json();
+      return j.feedItems || [];
+    });
+  }
+  function starlingToInternal(item, idx) {
+    var _a;
+    const minorUnits = ((_a = item.amount) == null ? void 0 : _a.minorUnits) || 0;
+    if (minorUnits === 0) return null;
+    const amount = (item.direction === "OUT" ? -1 : 1) * minorUnits / 100;
+    const catKey = (item.spendingCategory || "").toLowerCase().replace(/_/g, " ");
+    const cat = STARLING_CAT_MAP[catKey] || "Other";
+    const ref = (item.reference || "").toLowerCase();
+    const counterParty = (item.counterPartyName || "").toLowerCase();
+    let nativeTransferType = null;
+    if (/easy saver|savings pot|pot transfer/i.test(item.reference || "") || item.spendingCategory === "SAVINGS") {
+      nativeTransferType = "savings";
+    } else if (/grocery allowance/.test(ref) || /charlie devine/.test(counterParty)) {
+      nativeTransferType = "grocery";
+    } else if (/capital one/i.test(item.counterPartyName || "")) {
+      nativeTransferType = "creditcard";
+    }
+    return {
+      id: item.feedItemUid,
+      rowIndex: idx,
+      accountId: "main",
+      date: (item.transactionTime || item.updatedAt || "").slice(0, 10),
+      description: item.counterPartyName || item.reference || "",
+      amount,
+      balance: null,
+      category: cat,
+      nativeCategory: cat,
+      nativeTransferType
+    };
+  }
   const GIST_FILE = "finance-tracker-sync.json";
   const GIST_TOKEN_KEY = "finance-tracker-gist-token";
   const GIST_ID_KEY = "finance-tracker-gist-id";
@@ -902,6 +955,107 @@ root.render(React.createElement(App));
         }
       });
     }
+    function syncStarling() {
+      return __async(this, null, function* () {
+        var _a;
+        if (bankSyncing) return;
+        setBankSyncing(true);
+        try {
+          const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken);
+          const existing = transactions.filter((t) => t.accountId === "main");
+          const lastDate = (_a = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _a.date;
+          const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
+          const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+          const existingIds = new Set(transactions.map((t) => t.id));
+          const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter((t) => t && !existingIds.has(t.id));
+          if (!fresh.length) {
+            showToast("Starling \u2014 already up to date");
+            return;
+          }
+          setTransactions(
+            (prev) => [...prev, ...fresh].sort((a, b) => {
+              var _a2, _b;
+              if (b.date !== a.date) return b.date > a.date ? 1 : -1;
+              return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b = a.rowIndex) != null ? _b : 0);
+            })
+          );
+          showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
+        } catch (e) {
+          showToast(e.message, "error");
+        } finally {
+          setBankSyncing(false);
+        }
+      });
+    }
+    function syncAll() {
+      return __async(this, null, function* () {
+        var _a, _b;
+        if (bankSyncing) return;
+        setBankSyncing(true);
+        let monzoCount = 0, starlingCount = 0;
+        try {
+          if (starlingToken) {
+            try {
+              const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken);
+              const existing = transactions.filter((t) => t.accountId === "main");
+              const lastDate = (_a = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _a.date;
+              const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
+              const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+              const existingIds = new Set(transactions.map((t) => t.id));
+              const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter((t) => t && !existingIds.has(t.id));
+              if (fresh.length) {
+                starlingCount = fresh.length;
+                setTransactions(
+                  (prev) => [...prev, ...fresh].sort((a, b) => {
+                    var _a2, _b2;
+                    if (b.date !== a.date) return b.date > a.date ? 1 : -1;
+                    return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
+                  })
+                );
+              }
+            } catch (e) {
+              showToast(`Starling: ${e.message}`, "error");
+            }
+          }
+          if (monzoStatus === "connected") {
+            try {
+              const token = yield monzoGetValidToken();
+              const accId = yield monzoGetAccountId(token);
+              const existing = transactions.filter((t) => t.accountId === "grocery" && t.id.startsWith("tx_"));
+              const lastDate = (_b = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _b.date;
+              const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 90 * 24 * 60 * 60 * 1e3).toISOString();
+              const raw = yield monzoFetchTransactions(token, accId, since);
+              const existingIds = new Set(transactions.map((t) => t.id));
+              const fresh = raw.map((tx, i) => monzoToInternal(tx, i)).filter((t) => t && !existingIds.has(t.id));
+              if (fresh.length) {
+                monzoCount = fresh.length;
+                setTransactions(
+                  (prev) => [...prev, ...fresh].sort((a, b) => {
+                    var _a2, _b2;
+                    if (b.date !== a.date) return b.date > a.date ? 1 : -1;
+                    return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
+                  })
+                );
+              }
+            } catch (e) {
+              if (e.message === "REFRESH_FAILED") {
+                setMonzoStatus("expired");
+                showToast("Monzo session expired \u2014 reconnect in Settings", "error");
+              } else {
+                showToast(`Monzo: ${e.message}`, "error");
+              }
+            }
+          }
+          const parts = [];
+          if (starlingCount) parts.push(`${starlingCount} from Starling`);
+          if (monzoCount) parts.push(`${monzoCount} from Monzo`);
+          if (parts.length) showToast(`Synced ${parts.join(", ")}`);
+          else showToast("Already up to date");
+        } finally {
+          setBankSyncing(false);
+        }
+      });
+    }
     function connectMonzo() {
       return __async(this, null, function* () {
         try {
@@ -911,7 +1065,7 @@ root.render(React.createElement(App));
         }
       });
     }
-    return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), monzoStatus === "connected" && /* @__PURE__ */ React.createElement("button", { onClick: syncMonzo, disabled: bankSyncing, style: { background: bankSyncing ? "#1c1f2e" : "#4ade8015", border: `1px solid ${bankSyncing ? "#2a2d3a" : "#4ade8040"}`, color: bankSyncing ? "#4b5563" : "#4ade80", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: bankSyncing ? "default" : "pointer", letterSpacing: 1 } }, bankSyncing ? "\u27F3" : "\u2193", " SYNC"), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
+    return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), (starlingToken || monzoStatus === "connected") && /* @__PURE__ */ React.createElement("button", { onClick: syncAll, disabled: bankSyncing, style: { background: bankSyncing ? "#1c1f2e" : "#4ade8015", border: `1px solid ${bankSyncing ? "#2a2d3a" : "#4ade8040"}`, color: bankSyncing ? "#4b5563" : "#4ade80", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: bankSyncing ? "default" : "pointer", letterSpacing: 1 } }, bankSyncing ? "\u27F3" : "\u2193", " SYNC"), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
       background: activeAccounts.includes(a.id) ? a.color + "22" : "#1c1f2e",
       border: `1.5px solid ${activeAccounts.includes(a.id) ? a.color : "#1c1f2e"}`,
       color: activeAccounts.includes(a.id) ? a.color : "#4b5563",
@@ -1403,7 +1557,7 @@ root.render(React.createElement(App));
     const hasMonzoCfg = Boolean(window.MONZO_CONFIG);
     const days = Array.from({ length: 28 }, (_, i) => i + 1);
     const endDay = val === 1 ? 31 : val - 1;
-    return /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "#000000cc", zIndex: 100, display: "flex", alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: "16px 16px 0 0", width: "100%", maxHeight: "85vh", overflowY: "auto", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, letterSpacing: 1 } }, "SETTINGS"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", color: "#4b5563", fontSize: 20, cursor: "pointer" } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#fbbf24", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "ANTHROPIC API KEY"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Optional \u2014 for AI auto-categorisation. Get one at platform.anthropic.com \u2192 API Keys."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: keyVisible ? "text" : "password", value: keyInput, onChange: (e) => setKeyInput(e.target.value), placeholder: "sk-ant-...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${keyInput ? "#fbbf24" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setKeyVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, keyVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onApiKeySave(keyInput.trim()), style: { width: "100%", background: keyInput ? "#fbbf24" : "#1c1f2e", border: "none", color: keyInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: keyInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE KEY"), apiKey && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4ade80", marginTop: 6, textAlign: "center" } }, "\u2713 Key saved")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "GITHUB SYNC"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Syncs merchant rules & receipts across devices via a private GitHub Gist. Create a token at ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "github.com \u2192 Settings \u2192 Developer settings \u2192 Personal access tokens"), " with ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, "gist"), " scope only."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: gistVisible ? "text" : "password", value: gistInput, onChange: (e) => setGistInput(e.target.value), placeholder: "ghp_...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${gistInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setGistVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, gistVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onGistTokenSave(gistInput), style: { width: "100%", background: gistInput ? "#60a5fa" : "#1c1f2e", border: "none", color: gistInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: gistInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE & CONNECT"), gistToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, marginTop: 6, textAlign: "center", color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24" } }, syncStatus === "synced" ? "\u2713 Synced" : syncStatus === "error" ? "\u2717 Sync error \u2014 check token" : "\u27F3 Syncing...")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4ade80", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "MONZO \u2014 GROCERY ACCOUNT"), !hasMonzoCfg ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", lineHeight: 1.6 } }, "OAuth not configured. Copy ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "config.js.template"), " to ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "config.js"), ", fill in your Client ID from ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "developers.monzo.com"), ", then rebuild.") : monzoStatus === "connected" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4ade80", marginBottom: 10 } }, "\u2713 Connected \u2014 tokens stored, auto-refreshing"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: onMonzoDisconnect, style: { flex: 1, background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#f87171", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "DISCONNECT"))) : monzoStatus === "connecting" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#fbbf24", textAlign: "center", padding: "10px 0" } }, "\u27F3 Connecting to Monzo...") : monzoStatus === "expired" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#f87171", marginBottom: 10 } }, "Session expired \u2014 please reconnect to Monzo."), /* @__PURE__ */ React.createElement("button", { onClick: onMonzoConnect, style: { width: "100%", background: "#f8717120", border: "1px solid #f8717160", color: "#f87171", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "RECONNECT MONZO")) : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Connect via OAuth \u2014 you'll be redirected to Monzo to log in, then sent back here automatically."), /* @__PURE__ */ React.createElement("button", { onClick: onMonzoConnect, style: { width: "100%", background: "#4ade80", border: "none", color: "#0a0b0f", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "CONNECT MONZO"))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "STARLING \u2014 MAIN ACCOUNT"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Personal access token from ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "developer.starlingbank.com"), ". Save your token now \u2014 sync will be enabled in the next update."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: starlingVisible ? "text" : "password", value: starlingInput, onChange: (e) => setStarlingInput(e.target.value), placeholder: "eyJ...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${starlingInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setStarlingVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, starlingVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onStarlingTokenSave(starlingInput), style: { width: "100%", background: starlingInput ? "#60a5fa" : "#1c1f2e", border: "none", color: starlingInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: starlingInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE TOKEN"), starlingToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", marginTop: 6, textAlign: "center" } }, "\u2713 Token saved \u2014 sync coming soon")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "PAY CYCLE"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 12, lineHeight: 1.6 } }, "Period runs from the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(val)), " to the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(endDay)), " of the following month."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 } }, days.map((d) => /* @__PURE__ */ React.createElement("button", { key: d, onClick: () => setVal(d), style: { width: 44, height: 36, background: val === d ? "#60a5fa" : "#1c1f2e", color: val === d ? "#0a0b0f" : "#6b7280", border: `1px solid ${val === d ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, d))), /* @__PURE__ */ React.createElement("button", { onClick: () => onSave(val), style: { width: "100%", background: "#4ade80", border: "none", color: "#0a0b0f", borderRadius: 8, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", letterSpacing: 1 } }, "SAVE \u2014 ", ordinal(val), " TO ", ordinal(endDay))));
+    return /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "#000000cc", zIndex: 100, display: "flex", alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: "16px 16px 0 0", width: "100%", maxHeight: "85vh", overflowY: "auto", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, letterSpacing: 1 } }, "SETTINGS"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", color: "#4b5563", fontSize: 20, cursor: "pointer" } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#fbbf24", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "ANTHROPIC API KEY"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Optional \u2014 for AI auto-categorisation. Get one at platform.anthropic.com \u2192 API Keys."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: keyVisible ? "text" : "password", value: keyInput, onChange: (e) => setKeyInput(e.target.value), placeholder: "sk-ant-...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${keyInput ? "#fbbf24" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setKeyVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, keyVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onApiKeySave(keyInput.trim()), style: { width: "100%", background: keyInput ? "#fbbf24" : "#1c1f2e", border: "none", color: keyInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: keyInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE KEY"), apiKey && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4ade80", marginTop: 6, textAlign: "center" } }, "\u2713 Key saved")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "GITHUB SYNC"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Syncs merchant rules & receipts across devices via a private GitHub Gist. Create a token at ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "github.com \u2192 Settings \u2192 Developer settings \u2192 Personal access tokens"), " with ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, "gist"), " scope only."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: gistVisible ? "text" : "password", value: gistInput, onChange: (e) => setGistInput(e.target.value), placeholder: "ghp_...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${gistInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setGistVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, gistVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onGistTokenSave(gistInput), style: { width: "100%", background: gistInput ? "#60a5fa" : "#1c1f2e", border: "none", color: gistInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: gistInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE & CONNECT"), gistToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, marginTop: 6, textAlign: "center", color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24" } }, syncStatus === "synced" ? "\u2713 Synced" : syncStatus === "error" ? "\u2717 Sync error \u2014 check token" : "\u27F3 Syncing...")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4ade80", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "MONZO \u2014 GROCERY ACCOUNT"), !hasMonzoCfg ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", lineHeight: 1.6 } }, "OAuth not configured. Copy ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "config.js.template"), " to ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "config.js"), ", fill in your Client ID from ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "developers.monzo.com"), ", then rebuild.") : monzoStatus === "connected" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4ade80", marginBottom: 10 } }, "\u2713 Connected \u2014 tokens stored, auto-refreshing"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: onMonzoDisconnect, style: { flex: 1, background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#f87171", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "DISCONNECT"))) : monzoStatus === "connecting" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#fbbf24", textAlign: "center", padding: "10px 0" } }, "\u27F3 Connecting to Monzo...") : monzoStatus === "expired" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#f87171", marginBottom: 10 } }, "Session expired \u2014 please reconnect to Monzo."), /* @__PURE__ */ React.createElement("button", { onClick: onMonzoConnect, style: { width: "100%", background: "#f8717120", border: "1px solid #f8717160", color: "#f87171", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "RECONNECT MONZO")) : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Connect via OAuth \u2014 you'll be redirected to Monzo to log in, then sent back here automatically."), /* @__PURE__ */ React.createElement("button", { onClick: onMonzoConnect, style: { width: "100%", background: "#4ade80", border: "none", color: "#0a0b0f", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "CONNECT MONZO"))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "STARLING \u2014 MAIN ACCOUNT"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 10, lineHeight: 1.6 } }, "Personal access token from ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8" } }, "developer.starlingbank.com"), ". Save your token now \u2014 sync will be enabled in the next update."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("input", { type: starlingVisible ? "text" : "password", value: starlingInput, onChange: (e) => setStarlingInput(e.target.value), placeholder: "eyJ...", style: { flex: 1, background: "#1c1f2e", border: `1.5px solid ${starlingInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none" } }), /* @__PURE__ */ React.createElement("button", { onClick: () => setStarlingVisible((v) => !v), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#6b7280", borderRadius: 7, padding: "0 12px", fontSize: 12, cursor: "pointer" } }, starlingVisible ? "Hide" : "Show")), /* @__PURE__ */ React.createElement("button", { onClick: () => onStarlingTokenSave(starlingInput), style: { width: "100%", background: starlingInput ? "#60a5fa" : "#1c1f2e", border: "none", color: starlingInput ? "#0a0b0f" : "#4b5563", borderRadius: 7, padding: "9px", fontWeight: 700, fontSize: 12, cursor: starlingInput ? "pointer" : "default", letterSpacing: 1 } }, "SAVE TOKEN"), starlingToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4ade80", marginTop: 6, textAlign: "center" } }, "\u2713 Connected \u2014 use \u2193 SYNC to fetch transactions")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "PAY CYCLE"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 12, lineHeight: 1.6 } }, "Period runs from the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(val)), " to the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(endDay)), " of the following month."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 } }, days.map((d) => /* @__PURE__ */ React.createElement("button", { key: d, onClick: () => setVal(d), style: { width: 44, height: 36, background: val === d ? "#60a5fa" : "#1c1f2e", color: val === d ? "#0a0b0f" : "#6b7280", border: `1px solid ${val === d ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, d))), /* @__PURE__ */ React.createElement("button", { onClick: () => onSave(val), style: { width: "100%", background: "#4ade80", border: "none", color: "#0a0b0f", borderRadius: 8, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", letterSpacing: 1 } }, "SAVE \u2014 ", ordinal(val), " TO ", ordinal(endDay))));
   }
   function AddAccountModal({ onSave, onClose }) {
     const [name, setName] = useState("");
