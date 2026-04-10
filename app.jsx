@@ -854,13 +854,20 @@ root.render(React.createElement(App));
             ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
             : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
           const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
-          const existingIds = new Set(transactions.map(t => t.id));
-          const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter(t => t && !existingIds.has(t.id));
-          if (fresh.length) {
-            starlingCount = fresh.length;
-            setTransactions(prev =>
-              [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
-            );
+          if (!raw.length) { showToast("Starling: API returned 0 items", "error"); }
+          else {
+            const existingIds = new Set(transactions.map(t => t.id));
+            const converted = raw.map((item, i) => starlingToInternal(item, i));
+            const nonNull = converted.filter(t => t !== null);
+            const fresh = nonNull.filter(t => !existingIds.has(t.id));
+            if (!fresh.length) {
+              showToast(`Starling: got ${raw.length} items, ${nonNull.length} non-zero, all already imported`);
+            } else {
+              starlingCount = fresh.length;
+              setTransactions(prev =>
+                [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
+              );
+            }
           }
         } catch(e) {
           showToast(`Starling: ${e.message}`, "error");
