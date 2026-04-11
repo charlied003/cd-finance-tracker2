@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.8</title>
+<title>Finance Tracker v3.9</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -1550,17 +1550,22 @@ root.render(React.createElement(App));
         syncStatus,
         onGistTokenSave: (tok) => __async(null, null, function* () {
           const trimmed = tok.trim();
+          const knownId = gistId || localStorage.getItem(GIST_ID_KEY) || "";
           setGistToken(trimmed);
           localStorage.setItem(GIST_TOKEN_KEY, trimmed);
           if (trimmed) {
             setSyncStatus("syncing");
             syncReady.current = false;
             try {
-              const existing = yield gistFindExisting(trimmed);
-              if (existing) {
-                setGistId(existing.id);
-                localStorage.setItem(GIST_ID_KEY, existing.id);
-                const remote = yield gistFetch(trimmed, existing.id);
+              let resolvedId = knownId;
+              if (!resolvedId) {
+                const existing = yield gistFindExisting(trimmed);
+                resolvedId = (existing == null ? void 0 : existing.id) || "";
+              }
+              if (resolvedId) {
+                setGistId(resolvedId);
+                localStorage.setItem(GIST_ID_KEY, resolvedId);
+                const remote = yield gistFetch(trimmed, resolvedId);
                 if (remote.merchantRules) setMerchantRules((r) => __spreadValues(__spreadValues({}, r), remote.merchantRules));
                 if (remote.receipts) setReceipts((r) => __spreadValues(__spreadValues({}, r), remote.receipts));
                 if (remote.pinnedSubs) setPinnedSubs(remote.pinnedSubs);

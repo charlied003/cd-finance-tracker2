@@ -1311,19 +1311,23 @@ root.render(React.createElement(App));
           gistToken={gistToken} syncStatus={syncStatus}
           onGistTokenSave={async tok=>{
             const trimmed=tok.trim();
+            const knownId=gistId || localStorage.getItem(GIST_ID_KEY) || "";
             setGistToken(trimmed);
             localStorage.setItem(GIST_TOKEN_KEY, trimmed);
             if (trimmed) {
               setSyncStatus("syncing");
-              // Pause auto-sync while we load remote data — prevents overwriting gist with stale local state
               syncReady.current = false;
               try {
-                const existing = await gistFindExisting(trimmed);
-                if (existing) {
-                  setGistId(existing.id);
-                  localStorage.setItem(GIST_ID_KEY, existing.id);
-                  // Fetch and merge remote data before auto-sync re-enables
-                  const remote = await gistFetch(trimmed, existing.id);
+                let resolvedId = knownId;
+                // If we already have a gist ID, try to use it directly; otherwise search
+                if (!resolvedId) {
+                  const existing = await gistFindExisting(trimmed);
+                  resolvedId = existing?.id || "";
+                }
+                if (resolvedId) {
+                  setGistId(resolvedId);
+                  localStorage.setItem(GIST_ID_KEY, resolvedId);
+                  const remote = await gistFetch(trimmed, resolvedId);
                   if (remote.merchantRules) setMerchantRules(r => ({...r,...remote.merchantRules}));
                   if (remote.receipts)      setReceipts(r => ({...r,...remote.receipts}));
                   if (remote.pinnedSubs)    setPinnedSubs(remote.pinnedSubs);
@@ -1335,7 +1339,6 @@ root.render(React.createElement(App));
                 }
                 setSyncStatus("synced");
               } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
-              // Re-enable auto-sync after React has settled state
               setTimeout(() => { syncReady.current = true; }, 600);
             } else { setGistId(""); localStorage.removeItem(GIST_ID_KEY); setSyncStatus("idle"); }
           }}
