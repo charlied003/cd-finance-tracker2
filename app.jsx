@@ -1196,16 +1196,17 @@ root.render(React.createElement(App));
 function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,setComparePeriod,visibleTxns,spending,totalSpend,totalIncome,getAccountBalance,getSavingsAllocated,periodLabel,devServices,setDevServices,aiScanCount}) {
   const topCats    = Object.entries(spending).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const net        = totalIncome - totalSpend;
+  const transferType = t => t.transferType || t.nativeTransferType;
   const toSavings  = visibleTxns.filter(t=>t.category==="Savings"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0) - visibleTxns.filter(t=>t.category==="SavingsReturn").reduce((s,t)=>s+Math.abs(t.amount),0);
-  const toGrocery  = visibleTxns.filter(t=>t.category==="Transfer"&&t.transferType==="grocery"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
-  const toCreditCard = visibleTxns.filter(t=>t.category==="Transfer"&&t.transferType==="creditcard"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
+  const toGrocery  = visibleTxns.filter(t=>transferType(t)==="grocery"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
+  const toCreditCard = visibleTxns.filter(t=>transferType(t)==="creditcard"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
 
   return (
     <div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
         {[["Spent",fmt(totalSpend),"#f87171"],["In",fmt(totalIncome),"#4ade80"],
           ["Net",fmtSigned(net),net>=0?"#4ade80":"#f87171"],
-          ["To Savings",toSavings<0?fmtSigned(toSavings):fmt(toSavings),toSavings<0?"#4ade80":"#fbbf24"],
+          ["To Savings",toSavings<0?fmtSigned(toSavings):fmt(toSavings),toSavings<0?"#f87171":"#fbbf24"],
           ["To Grocery",fmt(toGrocery),"#4ade80"],
           ["Credit Card",fmt(toCreditCard),"#f87171"],
         ].map(([label,val,col])=>(
