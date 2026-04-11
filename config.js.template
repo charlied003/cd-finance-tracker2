@@ -12,6 +12,7 @@
 // PKCE flow: no client secret is used. The clientId is safe to be in the built HTML.
 
 window.MONZO_CONFIG = {
-  clientId:    "oauth2client_xxxxxxxxxxxxxxxxxxxxxxxx",
-  redirectUri: "https://charlied003.github.io/cd-finance-tracker2/",
+  clientId:     "oauth2client_xxxxxxxxxxxxxxxxxxxxxxxx",
+  clientSecret: "mnzconf.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", // only for confidential clients
+  redirectUri:  "https://charlied003.github.io/cd-finance-tracker2/",
 };

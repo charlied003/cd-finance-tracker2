@@ -327,15 +327,17 @@ function monzoSaveTokens({ access_token, refresh_token, expires_in }) {
 }
 function monzoClearTokens() { [MONZO_ACCESS_KEY, MONZO_REFRESH_KEY, MONZO_EXPIRY_KEY].forEach(k => localStorage.removeItem(k)); }
 
-// Exchange auth code for tokens (PKCE — no client secret)
+// Exchange auth code for tokens (PKCE; includes client_secret if confidential client)
 async function monzoExchangeCode(code) {
   const cfg = monzoCfg(); if (!cfg) throw new Error("Monzo config missing");
   const verifier = sessionStorage.getItem(MONZO_VERIFIER_KEY);
   if (!verifier) throw new Error("PKCE verifier missing — please try connecting again");
   sessionStorage.removeItem(MONZO_VERIFIER_KEY);
+  const params = { grant_type: "authorization_code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, code, code_verifier: verifier };
+  if (cfg.clientSecret) params.client_secret = cfg.clientSecret;
   const res = await fetch("https://api.monzo.com/oauth2/token", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "authorization_code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, code, code_verifier: verifier }),
+    body: new URLSearchParams(params),
   });
   if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.message || `Exchange failed (${res.status})`); }
   return res.json();
@@ -345,9 +347,11 @@ async function monzoExchangeCode(code) {
 async function monzoDoRefresh() {
   const cfg = monzoCfg(); const { refresh } = monzoTokens();
   if (!cfg || !refresh) throw new Error("REFRESH_FAILED");
+  const params = { grant_type: "refresh_token", client_id: cfg.clientId, refresh_token: refresh };
+  if (cfg.clientSecret) params.client_secret = cfg.clientSecret;
   const res = await fetch("https://api.monzo.com/oauth2/token", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "refresh_token", client_id: cfg.clientId, refresh_token: refresh }),
+    body: new URLSearchParams(params),
   });
   if (!res.ok) throw new Error("REFRESH_FAILED");
   return res.json();
@@ -973,10 +977,10 @@ root.render(React.createElement(App));
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setModal({type:"rules"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>RULES</button>
             <button onClick={exportHTML} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>↓ HTML</button>
+            <button onClick={()=>setReceiptModal({step:"upload",pinnedTxId:null,queue:[],currentIdx:0})} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>🧾</button>
             <button onClick={()=>setModal({type:"settings"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>
               ⚙{gistToken&&<span style={{fontSize:8,marginLeft:4,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24",verticalAlign:"middle"}}>{syncStatus==="syncing"?"⟳":"●"}</span>}
             </button>
-            {(starlingToken||monzoStatus==="connected")&&<button onClick={syncAll} disabled={bankSyncing} style={{background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>{bankSyncing?"⟳":"↓"} SYNC</button>}
             {monzoStatus==="expired"&&<button onClick={()=>setModal({type:"settings"})} style={{background:"#f8717115",border:"1px solid #f8717140",color:"#f87171",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:1}}>⚠ RECONNECT</button>}
             <button onClick={()=>setModal({type:"import"})} style={{background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ CSV</button>
           </div>
@@ -1078,21 +1082,65 @@ root.render(React.createElement(App));
           onMonzoDisconnect={()=>{ monzoClearTokens(); setMonzoStatus("disconnected"); showToast("Monzo disconnected"); }}
           starlingToken={starlingToken} onStarlingTokenSave={tok=>{const t=tok.trim();setStarlingToken(t);t?localStorage.setItem(STARLING_TOKEN_KEY,t):localStorage.removeItem(STARLING_TOKEN_KEY);showToast(t?"Starling token saved":"Starling token cleared");}}
           starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
+          bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
+          onExportCredentials={()=>{
+            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey};
+            const a=document.createElement("a");a.href="data:application/json,"+encodeURIComponent(JSON.stringify(creds,null,2));a.download="finance-tracker-credentials.json";a.click();
+          }}
+          onImportCredentials={e=>{
+            const file=e.target.files[0]; if(!file) return; e.target.value="";
+            file.text().then(txt=>{
+              try {
+                const c=JSON.parse(txt);
+                if(c.starlingToken){setStarlingToken(c.starlingToken);localStorage.setItem(STARLING_TOKEN_KEY,c.starlingToken);}
+                if(c.starlingProxy){setStarlingProxy(c.starlingProxy);localStorage.setItem(STARLING_PROXY_KEY,c.starlingProxy);}
+                if(c.gistToken){setGistToken(c.gistToken);localStorage.setItem(GIST_TOKEN_KEY,c.gistToken);}
+                if(c.gistId){setGistId(c.gistId);localStorage.setItem(GIST_ID_KEY,c.gistId);}
+                if(c.anthropicKey){setApiKey(c.anthropicKey);}
+                showToast("Credentials imported");
+              } catch { showToast("Invalid credentials file","error"); }
+            });
+          }}
           onSave={v=>{setCycleStart(v);setSelectedPeriod(null);setComparePeriod(null);setModal(null);showToast(`Pay cycle: ${ordinal(v)} of month`);}} onClose={()=>setModal(null)} />}
       {modal?.type==="import"    && <ImportModal importState={importState} setImportState={setImportState} accounts={accounts} fileRef={fileRef} onFile={handleCSVFile} onAI={runAICategorise} onConfirm={confirmImport} onClose={()=>{setModal(null);setImportState({step:"upload",accountId:"",rows:[],preview:[],isMonzo:false});}} loading={loading} onClearAccount={(id)=>{setTransactions(prev=>prev.filter(t=>t.accountId!==id));showToast("Cleared");}} />}
       {modal?.type==="addAccount"&& <AddAccountModal onSave={a=>{setAccounts(prev=>[...prev,a]);setActiveAccounts(prev=>[...prev,a.id]);setModal(null);showToast("Account added");}} onClose={()=>setModal(null)} />}
       {modal?.type==="rules"     && <RulesModal merchantRules={merchantRules} setMerchantRules={setMerchantRules} onClose={()=>setModal(null)} />}
       <input ref={fileRef} type="file" accept=".csv,text/csv" style={{display:"none"}} onChange={e=>handleCSVFile(e.target.files[0])} />
-      <input ref={receiptRef} type="file" accept="image/*" style={{display:"none"}}
+      <input ref={receiptRef} type="file" accept="image/*" multiple style={{display:"none"}}
         onChange={async e=>{
-          const file=e.target.files[0]; if(!file) return; e.target.value="";
-          const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
-          setReceiptModal(s=>({...s,step:"extracting",base64:b64,mediaType:file.type}));
+          const files=Array.from(e.target.files); if(!files.length) return; e.target.value="";
+          const items = await Promise.all(files.map(async file=>{
+            const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+            return {id:uid(),base64:b64,mediaType:file.type,status:"pending",extracted:null,errorMsg:null};
+          }));
+          setReceiptModal(prev=>({
+            pinnedTxId: prev?.pinnedTxId||null,
+            queue: [...(prev?.queue||[]), ...items],
+            currentIdx: prev?.queue?.length||0,
+            step:"extracting",
+          }));
         }} />
       {receiptModal && <ReceiptModal
         state={receiptModal} setState={setReceiptModal}
         transactions={transactions} fileRef={receiptRef} apiKey={apiKey}
-        onSave={(txId,data)=>{setReceipts(prev=>({...prev,[txId]:data}));setReceiptModal(null);showToast("Receipt saved");}}
+        onSave={(txId,data)=>{
+          setReceipts(prev=>({...prev,[txId]:data}));
+          trackAiScan("receipt");
+          setReceiptModal(prev=>{
+            const nextIdx = (prev.currentIdx||0)+1;
+            if(nextIdx >= (prev.queue||[]).length){ return null; }
+            return {...prev, currentIdx:nextIdx, step:"extracting"};
+          });
+          const remaining = (receiptModal.queue?.length||1) - ((receiptModal.currentIdx||0)+1);
+          showToast(remaining>0?`Receipt saved — ${remaining} remaining`:"All receipts saved");
+        }}
+        onSkip={()=>{
+          setReceiptModal(prev=>{
+            const nextIdx=(prev.currentIdx||0)+1;
+            if(nextIdx>=(prev.queue||[]).length) return null;
+            return {...prev,currentIdx:nextIdx,step:"extracting"};
+          });
+        }}
         onClose={()=>setReceiptModal(null)} onAiScan={()=>trackAiScan("receipt")} />}
 
       {toast && <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#f87171":"#4ade80",color:"#0a0b0f",borderRadius:8,padding:"10px 20px",fontWeight:700,fontSize:13,zIndex:200,letterSpacing:0.5,boxShadow:"0 8px 32px rgba(0,0,0,.5)",whiteSpace:"nowrap"}}>{toast.msg}</div>}
@@ -1801,7 +1849,8 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials}) {
+  const credImportRef = useRef();
   const [val,setVal]=useState(cycleStart);
   const [keyInput,setKeyInput]=useState(apiKey||"");
   const [keyVisible,setKeyVisible]=useState(false);
@@ -1855,6 +1904,9 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
             <div>
               <div style={{fontSize:11,color:"#4ade80",marginBottom:10}}>✓ Connected — tokens stored, auto-refreshing</div>
               <div style={{display:"flex",gap:8}}>
+                <button onClick={onSyncMonzo} disabled={bankSyncing} style={{flex:2,background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
+                  {bankSyncing?"⟳ SYNCING…":"↓ SYNC MONZO"}
+                </button>
                 <button onClick={onMonzoDisconnect} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#f87171",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>DISCONNECT</button>
               </div>
             </div>
@@ -1884,8 +1936,21 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
           <div style={{fontSize:11,color:"#4b5563",marginBottom:8,lineHeight:1.6}}>Required for Starling sync. Deploy <span style={{color:"#94a3b8"}}>worker.js</span> to Cloudflare Workers and paste the URL here (e.g. <span style={{color:"#94a3b8"}}>https://cd-finance-starling-proxy.workers.dev</span>).</div>
           <input value={proxyInput} onChange={e=>setProxyInput(e.target.value)} placeholder="https://....workers.dev" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${proxyInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",marginBottom:8,boxSizing:"border-box"}}/>
           <button onClick={()=>onStarlingProxySave(proxyInput)} style={{width:"100%",background:proxyInput?"#60a5fa":"#1c1f2e",border:"none",color:proxyInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:proxyInput?"pointer":"default",letterSpacing:1}}>SAVE PROXY URL</button>
-          {starlingToken&&starlingProxy&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Ready — use ↓ SYNC to fetch transactions</div>}
+          {starlingToken&&starlingProxy&&(
+            <button onClick={onSyncStarling} disabled={bankSyncing} style={{width:"100%",marginTop:8,background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
+              {bankSyncing?"⟳ SYNCING…":"↓ SYNC STARLING"}
+            </button>
+          )}
           {starlingToken&&!starlingProxy&&<div style={{fontSize:10,color:"#fbbf24",marginTop:6,textAlign:"center"}}>⚠ Token saved but proxy URL needed for sync</div>}
+        </div>
+        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
+          <div style={{fontSize:10,color:"#94a3b8",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>CREDENTIALS FILE</div>
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Export all your tokens to a JSON file. Upload it on another device to restore everything instantly — no re-entering tokens.</div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={onExportCredentials} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↓ EXPORT</button>
+            <button onClick={()=>credImportRef.current?.click()} style={{flex:1,background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↑ IMPORT</button>
+          </div>
+          <input ref={credImportRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={onImportCredentials}/>
         </div>
         <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>PAY CYCLE</div>
         <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>
@@ -2104,47 +2169,76 @@ function ReceiptsView({transactions, receipts, onAdd}) {
 }
 
 // ─── Receipt Modal ────────────────────────────────────────────────────────────
-function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, apiKey, onAiScan}) {
-  const [loading, setLoading]       = useState(false);
-  const [editItems, setEditItems]   = useState(null);
-  const [selectedTxId, setSelectedTxId] = useState(state.pinnedTxId||null);
+function ReceiptModal({state, setState, transactions, fileRef, onSave, onSkip, onClose, apiKey, onAiScan}) {
+  const queue      = state.queue || [];
+  const currentIdx = state.currentIdx || 0;
+  const current    = queue[currentIdx];
+  const total      = queue.length;
 
+  const [editItems, setEditItems]       = useState(null);
+  const [selectedTxId, setSelectedTxId] = useState(state.pinnedTxId||null);
+  const [extracted, setExtracted]       = useState(null);
+  const [candidates, setCandidates]     = useState([]);
+  const [errorMsg, setErrorMsg]         = useState(null);
+
+  // Reset per-receipt state when moving to a new queue item
   useEffect(()=>{
-    if(state.step==="extracting"&&state.base64){
-      const key=(apiKey||"").trim();
-      if(!key){ setState(s=>({...s,step:"error",errorMsg:"No API key — add one in ⚙ Settings"})); return; }
-      aiExtractReceipt(state.base64, state.mediaType, key)
-        .then(extracted=>{
-          onAiScan?.();
-          const candidates=matchReceiptToTransaction(extracted,transactions);
-          const bestMatch=state.pinnedTxId?state.pinnedTxId:(candidates[0]?.id||null);
-          setSelectedTxId(bestMatch);
-          setEditItems(extracted.items?.length>0?extracted.items:[{name:"",amount:0,qty:1}]);
-          setState(s=>({...s,step:"confirm",extracted,candidates}));
-        })
-        .catch(e=>setState(s=>({...s,step:"error",errorMsg:e.message||"Extraction failed"})));
-    }
-  },[state.step]);
+    setEditItems(null); setSelectedTxId(state.pinnedTxId||null);
+    setExtracted(null); setCandidates([]); setErrorMsg(null);
+  },[currentIdx]);
+
+  // Extract current receipt when step is "extracting"
+  useEffect(()=>{
+    if(state.step!=="extracting"||!current) return;
+    const key=(apiKey||"").trim();
+    if(!key){ setErrorMsg("No API key — add one in ⚙ Settings"); setState(s=>({...s,step:"error"})); return; }
+    aiExtractReceipt(current.base64, current.mediaType, key)
+      .then(ext=>{
+        onAiScan?.();
+        const cands=matchReceiptToTransaction(ext,transactions);
+        const best=state.pinnedTxId?state.pinnedTxId:(cands[0]?.id||null);
+        setSelectedTxId(best); setExtracted(ext); setCandidates(cands);
+        setEditItems(ext.items?.length>0?ext.items:[{name:"",amount:0,qty:1}]);
+        setState(s=>({...s,step:"confirm"}));
+      })
+      .catch(e=>{ setErrorMsg(e.message||"Extraction failed"); setState(s=>({...s,step:"error"})); });
+  },[state.step, currentIdx]);
+
+  const progressLabel = total>1 ? `Receipt ${currentIdx+1} of ${total}` : null;
 
   return (
     <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:100,display:"flex",alignItems:"flex-end"}}>
       <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:"16px 16px 0 0",width:"100%",maxHeight:"88vh",overflowY:"auto",padding:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:progressLabel?8:16}}>
           <div style={{fontSize:14,fontWeight:700,letterSpacing:1}}>
             {state.step==="confirm"?"CONFIRM RECEIPT":"ADD RECEIPT"}
           </div>
-          <button onClick={onClose} style={{background:"none",border:"none",color:"#4b5563",fontSize:20,cursor:"pointer"}}>✕</button>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            {total>1&&onSkip&&state.step==="confirm"&&<button onClick={onSkip} style={{background:"transparent",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>Skip →</button>}
+            <button onClick={onClose} style={{background:"none",border:"none",color:"#4b5563",fontSize:20,cursor:"pointer"}}>✕</button>
+          </div>
         </div>
+
+        {progressLabel&&(
+          <div style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:10,color:"#4b5563"}}>
+              <span>{progressLabel}</span><span>{currentIdx+1}/{total}</span>
+            </div>
+            <div style={{height:3,background:"#1c1f2e",borderRadius:2}}>
+              <div style={{height:"100%",background:"#fbbf24",borderRadius:2,width:`${((currentIdx+1)/total)*100}%`,transition:"width .3s"}}/>
+            </div>
+          </div>
+        )}
 
         {state.step==="upload"&&(
           <div>
             {!apiKey&&<div style={{background:"#f8717120",border:"1px solid #f8717140",borderRadius:8,padding:12,marginBottom:14,fontSize:12,color:"#f87171",lineHeight:1.5}}>⚠️ No API key — go to ⚙ Settings to add your Anthropic key first.</div>}
             <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${apiKey?"#fbbf2460":"#2a2d3a"}`,borderRadius:12,padding:"36px 20px",textAlign:"center",cursor:"pointer",background:apiKey?"#fbbf2408":"#1c1f2e"}}>
               <div style={{fontSize:36}}>📷</div>
-              <div style={{fontSize:14,fontWeight:700,marginTop:10,color:apiKey?"#e2e4ec":"#6b7280"}}>Tap to photograph or upload receipt</div>
-              <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>AI extracts items and matches to transaction</div>
+              <div style={{fontSize:14,fontWeight:700,marginTop:10,color:apiKey?"#e2e4ec":"#6b7280"}}>Tap to select receipt photos</div>
+              <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>Select multiple to process as a batch</div>
             </div>
-            <button onClick={()=>{setEditItems([{name:"",amount:0,qty:1}]);setState(s=>({...s,step:"confirm",extracted:{merchant:"",date:null,total:null},candidates:[]}));}}
+            <button onClick={()=>{setEditItems([{name:"",amount:0,qty:1}]);setExtracted({merchant:"",date:null,total:null});setCandidates([]);setState(s=>({...s,step:"confirm"}));}}
               style={{width:"100%",marginTop:10,background:"transparent",border:"1px dashed #2a2d3a",color:"#4b5563",borderRadius:8,padding:10,fontWeight:700,fontSize:12,cursor:"pointer"}}>
               Enter Manually Instead
             </button>
@@ -2155,7 +2249,7 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
           <div style={{textAlign:"center",padding:"40px 0"}}>
             <div style={{fontSize:36}}>⏳</div>
             <div style={{fontSize:14,fontWeight:700,marginTop:12,color:"#fbbf24"}}>Reading receipt…</div>
-            <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>Extracting items and matching transaction</div>
+            <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>{progressLabel||"Extracting items and matching transaction"}</div>
           </div>
         )}
 
@@ -2164,11 +2258,12 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
             <div style={{textAlign:"center",padding:"20px 0 16px"}}>
               <div style={{fontSize:32}}>⚠️</div>
               <div style={{fontSize:14,fontWeight:700,marginTop:8}}>Scan failed</div>
-              <div style={{fontSize:12,color:"#f87171",marginTop:6,padding:"8px 12px",background:"#f8717115",borderRadius:8,wordBreak:"break-word",lineHeight:1.5}}>{state.errorMsg||"Unknown error"}</div>
+              <div style={{fontSize:12,color:"#f87171",marginTop:6,padding:"8px 12px",background:"#f8717115",borderRadius:8,wordBreak:"break-word",lineHeight:1.5}}>{errorMsg||"Unknown error"}</div>
             </div>
             <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>setState(s=>({...s,step:"upload",errorMsg:null}))} style={{flex:1,background:"#1c1f2e",border:"none",color:"#6b7280",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer"}}>← Back</button>
-              <button onClick={()=>{setEditItems([{name:"",amount:0,qty:1}]);setState(s=>({...s,step:"confirm",extracted:{merchant:"",date:null,total:null},candidates:[]}));}}
+              {total<=1&&<button onClick={()=>setState(s=>({...s,step:"upload"}))} style={{flex:1,background:"#1c1f2e",border:"none",color:"#6b7280",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer"}}>← Back</button>}
+              {total>1&&<button onClick={onSkip} style={{flex:1,background:"#1c1f2e",border:"none",color:"#6b7280",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer"}}>Skip →</button>}
+              <button onClick={()=>{setEditItems([{name:"",amount:0,qty:1}]);setExtracted({merchant:"",date:null,total:null});setCandidates([]);setState(s=>({...s,step:"confirm"}));}}
                 style={{flex:2,background:"#fbbf24",border:"none",color:"#0a0b0f",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer"}}>Enter Manually</button>
             </div>
           </div>
@@ -2179,7 +2274,7 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
             <div style={{marginBottom:14}}>
               <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,marginBottom:8}}>MATCHED TRANSACTION</div>
               {[...(state.pinnedTxId?transactions.filter(t=>t.id===state.pinnedTxId):[]),
-                ...(state.candidates||[]).filter(t=>t.id!==state.pinnedTxId).slice(0,3)
+                ...candidates.filter(t=>t.id!==state.pinnedTxId).slice(0,3)
               ].map(t=>(
                 <button key={t.id} onClick={()=>setSelectedTxId(t.id)} style={{
                   display:"flex",width:"100%",alignItems:"center",gap:10,
@@ -2194,13 +2289,14 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
                   {selectedTxId===t.id&&<span style={{fontSize:14}}>✓</span>}
                 </button>
               ))}
-              {(state.candidates||[]).length===0&&!state.pinnedTxId&&<div style={{fontSize:12,color:"#f87171",marginBottom:8}}>No close match — select a transaction above or skip</div>}
+              {candidates.length===0&&!state.pinnedTxId&&<div style={{fontSize:12,color:"#f87171",marginBottom:8}}>No close match found — search below or skip</div>}
+              <TxSearch transactions={transactions} onSelect={setSelectedTxId} selectedId={selectedTxId}/>
             </div>
 
-            {state.extracted?.merchant&&<div style={{background:"#1c1f2e",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#6b7280"}}>
-              Receipt: <strong style={{color:"#94a3b8"}}>{state.extracted.merchant}</strong>
-              {state.extracted.date&&<> · {state.extracted.date}</>}
-              {state.extracted.total&&<> · {fmt(state.extracted.total)}</>}
+            {extracted?.merchant&&<div style={{background:"#1c1f2e",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#6b7280"}}>
+              Receipt: <strong style={{color:"#94a3b8"}}>{extracted.merchant}</strong>
+              {extracted.date&&<> · {extracted.date}</>}
+              {extracted.total&&<> · {fmt(extracted.total)}</>}
             </div>}
 
             <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,marginBottom:8}}>ITEMS</div>
@@ -2217,17 +2313,39 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
             ))}
             <button onClick={()=>setEditItems(prev=>[...prev,{name:"",amount:0,qty:1}])} style={{background:"transparent",border:"1px dashed #2a2d3a",color:"#4b5563",borderRadius:6,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:14}}>+ Add item</button>
 
-            <button onClick={()=>{
-              if(!selectedTxId) return;
-              onSave(selectedTxId,{items:editItems,extractedMerchant:state.extracted?.merchant,extractedDate:state.extracted?.date,extractedTotal:state.extracted?.total});
-            }} disabled={!selectedTxId} style={{
-              width:"100%",background:selectedTxId?"#fbbf24":"#1c1f2e",border:"none",
-              color:selectedTxId?"#0a0b0f":"#4b5563",borderRadius:8,padding:14,
-              fontWeight:700,fontSize:13,cursor:selectedTxId?"pointer":"default",letterSpacing:1,
-            }}>SAVE RECEIPT</button>
+            <div style={{display:"flex",gap:8}}>
+              {total>1&&<button onClick={onSkip} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:8,padding:14,fontWeight:700,fontSize:12,cursor:"pointer"}}>Skip →</button>}
+              <button onClick={()=>{
+                if(!selectedTxId) return;
+                onSave(selectedTxId,{items:editItems,extractedMerchant:extracted?.merchant,extractedDate:extracted?.date,extractedTotal:extracted?.total});
+              }} disabled={!selectedTxId} style={{
+                flex:3,background:selectedTxId?"#fbbf24":"#1c1f2e",border:"none",
+                color:selectedTxId?"#0a0b0f":"#4b5563",borderRadius:8,padding:14,
+                fontWeight:700,fontSize:13,cursor:selectedTxId?"pointer":"default",letterSpacing:1,
+              }}>{total>1?`SAVE & NEXT (${currentIdx+1}/${total})`:"SAVE RECEIPT"}</button>
+            </div>
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function TxSearch({transactions, onSelect, selectedId}) {
+  const [q,setQ]=useState("");
+  if(!q) return <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search transactions…" style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginTop:4}}/>;
+  const results=transactions.filter(t=>t.description.toLowerCase().includes(q.toLowerCase())).slice(0,4);
+  return (
+    <div>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search transactions…" style={{width:"100%",background:"#1c1f2e",border:"1px solid #60a5fa60",borderRadius:6,padding:"6px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginTop:4,marginBottom:4}}/>
+      {results.map(t=>(
+        <button key={t.id} onClick={()=>{onSelect(t.id);setQ("");}} style={{display:"flex",width:"100%",alignItems:"center",gap:10,background:selectedId===t.id?"#60a5fa20":"#1c1f2e",border:`1px solid ${selectedId===t.id?"#60a5fa":"#2a2d3a"}`,borderRadius:6,padding:"7px 10px",marginBottom:4,cursor:"pointer",textAlign:"left"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.description}</div>
+            <div style={{fontSize:10,color:"#4b5563"}}>{t.date} · {fmt(Math.abs(t.amount))}</div>
+          </div>
+        </button>
+      ))}
     </div>
   );
 }
