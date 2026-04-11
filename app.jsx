@@ -22,6 +22,7 @@ const CAT_COLORS = {
   Savings:"#fde68a",    SavingsReturn:"#4ade80", Transfer:"#6b7280", Other:"#4b5563",
 };
 
+const APP_VERSION = "__APP_VERSION__";
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const STORAGE_KEY = "finance-tracker-v5";
 const DEFAULT_CYCLE_START = 25;
@@ -1322,7 +1323,10 @@ root.render(React.createElement(App));
       <div style={{background:"#0f1117",borderBottom:"1px solid #1c1f2e",padding:"18px 16px 0",position:"sticky",top:0,zIndex:20}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
           <div>
-            <div style={{fontSize:10,letterSpacing:4,color:"#60a5fa",textTransform:"uppercase",fontWeight:700}}>Finance</div>
+            <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+              <div style={{fontSize:10,letterSpacing:4,color:"#60a5fa",textTransform:"uppercase",fontWeight:700}}>Finance</div>
+              <div style={{fontSize:9,color:"#2a2d3e",fontWeight:700,letterSpacing:1}}>v{APP_VERSION}</div>
+            </div>
             <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginTop:1}}>Overview</div>
           </div>
           <div style={{display:"flex",gap:8}}>

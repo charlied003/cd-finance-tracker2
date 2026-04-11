@@ -10,6 +10,9 @@ const version = process.argv[2] || "2.1";
 
 let src = fs.readFileSync("app.jsx", "utf8");
 
+// Inject version into APP_VERSION constant
+src = src.replace('"__APP_VERSION__"', `"${version}"`);
+
 // Swap React import for CDN global destructure
 src = src.replace(
   /import\s*\{([^}]+)\}\s*from\s*["']react["'];?/,
