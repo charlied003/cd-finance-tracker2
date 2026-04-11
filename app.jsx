@@ -546,6 +546,7 @@ export default function App() {
   const syncTimer                           = useRef(null);
   const syncReady                           = useRef(false);
   const [monzoStatus, setMonzoStatus]       = useState("disconnected"); // disconnected|connecting|connected|expired
+  const [monzoCfgReady, setMonzoCfgReady]   = useState(Boolean(window.MONZO_CONFIG));
   const [starlingToken, setStarlingToken]   = useState("");
   const [starlingProxy, setStarlingProxy]   = useState("");
   const [bankSyncing, setBankSyncing]       = useState(false);
@@ -1082,6 +1083,7 @@ root.render(React.createElement(App));
           onMonzoDisconnect={()=>{ monzoClearTokens(); setMonzoStatus("disconnected"); showToast("Monzo disconnected"); }}
           starlingToken={starlingToken} onStarlingTokenSave={tok=>{const t=tok.trim();setStarlingToken(t);t?localStorage.setItem(STARLING_TOKEN_KEY,t):localStorage.removeItem(STARLING_TOKEN_KEY);showToast(t?"Starling token saved":"Starling token cleared");}}
           starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
+          monzoCfgReady={monzoCfgReady}
           bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
           onExportCredentials={()=>{
             const cfg=window.MONZO_CONFIG||{};
@@ -1102,6 +1104,7 @@ root.render(React.createElement(App));
                   window.MONZO_CONFIG=window.MONZO_CONFIG||{};
                   if(c.monzoClientId) window.MONZO_CONFIG.clientId=c.monzoClientId;
                   if(c.monzoClientSecret) window.MONZO_CONFIG.clientSecret=c.monzoClientSecret;
+                  setMonzoCfgReady(true);
                 }
                 showToast("Credentials imported");
               } catch { showToast("Invalid credentials file","error"); }
@@ -1855,7 +1858,7 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady}) {
   const credImportRef = useRef();
   const [val,setVal]=useState(cycleStart);
   const [keyInput,setKeyInput]=useState(apiKey||"");
@@ -1865,7 +1868,7 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
   const [starlingInput,setStarlingInput]=useState(starlingToken||"");
   const [starlingVisible,setStarlingVisible]=useState(false);
   const [proxyInput,setProxyInput]=useState(starlingProxy||"");
-  const hasMonzoCfg = Boolean(window.MONZO_CONFIG);
+  const hasMonzoCfg = monzoCfgReady;
   const days=Array.from({length:28},(_,i)=>i+1);
   const endDay=val===1?31:val-1;
   return (
