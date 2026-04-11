@@ -621,27 +621,15 @@ async function gistFetch(token, gistId) {
 }
 
 async function gistSave(token, gistId, data) {
+  if (!gistId) throw new Error("No gist ID configured");
   const body = { files: { [GIST_FILE]: { content: JSON.stringify(data, null, 2) } } };
-  if (gistId) {
-    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      method: "PATCH",
-      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    if (res.ok) return gistId;
-    if (res.status !== 404) throw new Error(`Gist update failed: ${res.status}`);
-    // 404 — stale ID, fall through to create a new gist
-  }
-  {
-    const res = await fetch("https://api.github.com/gists", {
-      method: "POST",
-      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, description: "Finance Tracker Sync", public: false })
-    });
-    if (!res.ok) throw new Error(`Gist create failed: ${res.status}`);
-    const j = await res.json();
-    return j.id;
-  }
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    method: "PATCH",
+    headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Gist save failed: ${res.status}`);
+  return gistId;
 }
 
 async function gistFindExisting(token) {
@@ -1332,24 +1320,11 @@ root.render(React.createElement(App));
               setSyncStatus("syncing");
               syncReady.current = false;
               try {
-                let resolvedId = knownId;
-                // If we have a stored gist ID, verify it still exists; if not, fall back to search
-                if (resolvedId) {
-                  const check = await fetch(`https://api.github.com/gists/${resolvedId}`, { headers: { Authorization: `token ${trimmed}`, Accept: "application/vnd.github+json" } });
-                  if (!check.ok) {
-                    // Stale ID — clear it and search for an existing gist instead
-                    resolvedId = "";
-                    setGistId(""); localStorage.removeItem(GIST_ID_KEY);
-                  }
-                }
-                if (!resolvedId) {
-                  const existing = await gistFindExisting(trimmed);
-                  resolvedId = existing?.id || "";
-                }
-                if (resolvedId) {
-                  setGistId(resolvedId);
-                  localStorage.setItem(GIST_ID_KEY, resolvedId);
-                  const remote = await gistFetch(trimmed, resolvedId);
+                if (knownId) {
+                  // Load remote data from the fixed gist ID
+                  const remote = await gistFetch(trimmed, knownId);
+                  setGistId(knownId);
+                  localStorage.setItem(GIST_ID_KEY, knownId);
                   if (remote.merchantRules) setMerchantRules(r => ({...r,...remote.merchantRules}));
                   if (remote.receipts)      setReceipts(r => ({...r,...remote.receipts}));
                   if (remote.pinnedSubs)    setPinnedSubs(remote.pinnedSubs);
@@ -1357,10 +1332,10 @@ root.render(React.createElement(App));
                   if (remote.cycleStart)    setCycleStart(remote.cycleStart);
                   showToast("Sync connected — remote data loaded");
                 } else {
-                  showToast("Sync ready — hit SYNC NOW to create gist");
+                  showToast("Token saved — enter the Gist ID in ⚙ configure to connect");
                 }
                 setSyncStatus("synced");
-              } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
+              } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub — check token or gist ID","error"); }
               setTimeout(() => { syncReady.current = true; }, 600);
             } else { setGistId(""); localStorage.removeItem(GIST_ID_KEY); setSyncStatus("idle"); }
           }}
