@@ -678,7 +678,6 @@ export default function App() {
   const [gmailClientSecret, setGmailClientSecret] = useState(() => gmailCfg()?.clientSecret || "");
   const [gmailSyncing, setGmailSyncing]     = useState(false);
   const [gmailProgress, setGmailProgress]   = useState({ current: 0, total: 0 });
-  const [senderMap, setSenderMap]           = useState(() => { try { return JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}"); } catch { return {}; } });
   const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
     try {
@@ -796,7 +795,6 @@ const DEFAULT_RULES = {
           if (remote.accounts)      setAccounts(remote.accounts);
           if (remote.cycleStart)    setCycleStart(remote.cycleStart);
           if (remote.pinnedSubs)    setPinnedSubs(remote.pinnedSubs);
-          if (remote.senderMap)     setSenderMap(s => ({ ...remote.senderMap, ...s })); // local wins on conflict
           setSyncStatus("synced");
         } catch(e) {
           console.warn("Gist load failed:", e);
@@ -814,10 +812,6 @@ const DEFAULT_RULES = {
     if (window.storage) window.storage.set(STORAGE_KEY, data).catch(()=>{});
   }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts, pinnedSubs]);
 
-  useEffect(() => {
-    try { localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap)); } catch {}
-  }, [senderMap]);
-
   // Debounced Gist sync — fires 2s after any change to syncable data
   useEffect(() => {
     if (!syncReady.current || !gistToken) return;
@@ -827,25 +821,18 @@ const DEFAULT_RULES = {
       try {
         // Fetch remote first and merge receipts so no device ever loses another's receipts
         let mergedReceipts = receipts;
-        let mergedSenderMap = senderMap;
         try {
           const remote = await gistFetch(gistToken, gistId);
           if (remote.receipts) {
+            // Union: keep all remote receipts, local wins on same key
             const combined = { ...remote.receipts, ...receipts };
             if (Object.keys(combined).length > Object.keys(receipts).length) {
               mergedReceipts = combined;
               setReceipts(combined);
             }
           }
-          if (remote.senderMap) {
-            // Union: local wins on conflict (most recent confirm takes precedence)
-            mergedSenderMap = { ...remote.senderMap, ...senderMap };
-            if (Object.keys(mergedSenderMap).length > Object.keys(senderMap).length) {
-              setSenderMap(mergedSenderMap);
-            }
-          }
-        } catch(e) { /* ignore — just use local data */ }
-        const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs, senderMap: mergedSenderMap };
+        } catch(e) { /* ignore — just use local receipts */ }
+        const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs };
         const newId = await gistSave(gistToken, gistId, data);
         if (newId !== gistId) {
           setGistId(newId);
@@ -857,7 +844,7 @@ const DEFAULT_RULES = {
         setSyncStatus("error");
       }
     }, 2000);
-  }, [merchantRules, receipts, accounts, cycleStart, pinnedSubs, senderMap, gistToken, gistId]);
+  }, [merchantRules, receipts, accounts, cycleStart, pinnedSubs, gistToken, gistId]);
 
   // ── Derived ──
   const periods       = getAllPeriods(transactions, cycleStart);
@@ -1234,6 +1221,7 @@ root.render(React.createElement(App));
         catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
         if (order) {
           const oDate = new Date(order.orderDate || todayStr());
+          const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
           const senderEmail = (from.match(/<(.+)>/)?.[1] || from).toLowerCase();
           const knownDesc = senderMap[senderEmail] || "";
           const matched = [...transactions]
@@ -1522,7 +1510,11 @@ root.render(React.createElement(App));
           if (item.from) {
             const senderEmail = (item.from.match(/<(.+)>/)?.[1] || item.from).toLowerCase();
             const matchedTx = transactions.find(t => t.id === item.txnId);
-            if (matchedTx) setSenderMap(prev => ({...prev, [senderEmail]: matchedTx.description}));
+            if (matchedTx) {
+              const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
+              senderMap[senderEmail] = matchedTx.description;
+              localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
+            }
           }
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
           processed.add(item.msgId);
@@ -1541,19 +1533,20 @@ root.render(React.createElement(App));
         onConfirm={(confirmed) => {
           const newReceipts = {...receipts};
           const processed   = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
-          const newSenderEntries = {};
+          const senderMap   = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
           confirmed.forEach(({order, txnId, msgId, from}) => {
             if (txnId && order.items?.length) {
               newReceipts[txnId] = { items: order.items.map(item => ({name:item.name,qty:item.qty||1,amount:item.amount})) };
+              // Save sender→merchant mapping for bulk confirms too
               if (from) {
                 const senderEmail = (from.match(/<(.+)>/)?.[1] || from).toLowerCase();
                 const matchedTx = transactions.find(t => t.id === txnId);
-                if (matchedTx) newSenderEntries[senderEmail] = matchedTx.description;
+                if (matchedTx) senderMap[senderEmail] = matchedTx.description;
               }
             }
             if (msgId) processed.add(msgId);
           });
-          if (Object.keys(newSenderEntries).length) setSenderMap(prev => ({...prev, ...newSenderEntries}));
+          localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
           gmailModal.orders.forEach(o => { if (!confirmed.find(c=>c.msgId===o.msgId)) processed.add(o.msgId); });
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p => !gmailModal.orders.find(o=>o.msgId===p.msgId))));

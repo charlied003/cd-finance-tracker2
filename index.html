@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.11.5</title>
+<title>Finance Tracker v3.11.6</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -852,6 +852,13 @@ ${clean}` }]
     });
     const [gmailSyncing, setGmailSyncing] = useState(false);
     const [gmailProgress, setGmailProgress] = useState({ current: 0, total: 0 });
+    const [senderMap, setSenderMap] = useState(() => {
+      try {
+        return JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY) || "{}");
+      } catch (e) {
+        return {};
+      }
+    });
     const [gmailModal, setGmailModal] = useState(null);
     const [devServices, setDevServices] = useState(() => {
       try {
@@ -973,6 +980,7 @@ ${clean}` }]
             if (remote.accounts) setAccounts(remote.accounts);
             if (remote.cycleStart) setCycleStart(remote.cycleStart);
             if (remote.pinnedSubs) setPinnedSubs(remote.pinnedSubs);
+            if (remote.senderMap) setSenderMap((s) => __spreadValues(__spreadValues({}, remote.senderMap), s));
             setSyncStatus("synced");
           } catch (e) {
             console.warn("Gist load failed:", e);
@@ -993,12 +1001,19 @@ ${clean}` }]
       });
     }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts, pinnedSubs]);
     useEffect(() => {
+      try {
+        localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
+      } catch (e) {
+      }
+    }, [senderMap]);
+    useEffect(() => {
       if (!syncReady.current || !gistToken) return;
       setSyncStatus("syncing");
       if (syncTimer.current) clearTimeout(syncTimer.current);
       syncTimer.current = setTimeout(() => __async(null, null, function* () {
         try {
           let mergedReceipts = receipts;
+          let mergedSenderMap = senderMap;
           try {
             const remote = yield gistFetch(gistToken, gistId);
             if (remote.receipts) {
@@ -1008,9 +1023,15 @@ ${clean}` }]
                 setReceipts(combined);
               }
             }
+            if (remote.senderMap) {
+              mergedSenderMap = __spreadValues(__spreadValues({}, remote.senderMap), senderMap);
+              if (Object.keys(mergedSenderMap).length > Object.keys(senderMap).length) {
+                setSenderMap(mergedSenderMap);
+              }
+            }
           } catch (e) {
           }
-          const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs };
+          const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs, senderMap: mergedSenderMap };
           const newId = yield gistSave(gistToken, gistId, data);
           if (newId !== gistId) {
             setGistId(newId);
@@ -1022,7 +1043,7 @@ ${clean}` }]
           setSyncStatus("error");
         }
       }), 2e3);
-    }, [merchantRules, receipts, accounts, cycleStart, pinnedSubs, gistToken, gistId]);
+    }, [merchantRules, receipts, accounts, cycleStart, pinnedSubs, senderMap, gistToken, gistId]);
     const periods = getAllPeriods(transactions, cycleStart);
     const displayPeriod = selectedPeriod || periods[0] || getPeriodKey(todayStr(), cycleStart);
     const periodLabel = (pk) => getPeriodLabel(pk, cycleStart);
@@ -1472,7 +1493,6 @@ root.render(React.createElement(App));
             }
             if (order) {
               const oDate = new Date(order.orderDate || todayStr());
-              const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY) || "{}");
               const senderEmail = (((_d = from.match(/<(.+)>/)) == null ? void 0 : _d[1]) || from).toLowerCase();
               const knownDesc = senderMap[senderEmail] || "";
               const matched = ((_e = [...transactions].filter((t) => t.amount < 0).map((t) => {
@@ -1921,11 +1941,7 @@ root.render(React.createElement(App));
           if (item.from) {
             const senderEmail = (((_b = item.from.match(/<(.+)>/)) == null ? void 0 : _b[1]) || item.from).toLowerCase();
             const matchedTx = transactions.find((t) => t.id === item.txnId);
-            if (matchedTx) {
-              const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY) || "{}");
-              senderMap[senderEmail] = matchedTx.description;
-              localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
-            }
+            if (matchedTx) setSenderMap((prev) => __spreadProps(__spreadValues({}, prev), { [senderEmail]: matchedTx.description }));
           }
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : /* @__PURE__ */ new Set();
           processed.add(item.msgId);
@@ -1944,7 +1960,7 @@ root.render(React.createElement(App));
         onConfirm: (confirmed) => {
           const newReceipts = __spreadValues({}, receipts);
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : /* @__PURE__ */ new Set();
-          const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY) || "{}");
+          const newSenderEntries = {};
           confirmed.forEach(({ order, txnId, msgId, from }) => {
             var _a, _b;
             if (txnId && ((_a = order.items) == null ? void 0 : _a.length)) {
@@ -1952,12 +1968,12 @@ root.render(React.createElement(App));
               if (from) {
                 const senderEmail = (((_b = from.match(/<(.+)>/)) == null ? void 0 : _b[1]) || from).toLowerCase();
                 const matchedTx = transactions.find((t) => t.id === txnId);
-                if (matchedTx) senderMap[senderEmail] = matchedTx.description;
+                if (matchedTx) newSenderEntries[senderEmail] = matchedTx.description;
               }
             }
             if (msgId) processed.add(msgId);
           });
-          localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
+          if (Object.keys(newSenderEntries).length) setSenderMap((prev) => __spreadValues(__spreadValues({}, prev), newSenderEntries));
           gmailModal.orders.forEach((o) => {
             if (!confirmed.find((c) => c.msgId === o.msgId)) processed.add(o.msgId);
           });
