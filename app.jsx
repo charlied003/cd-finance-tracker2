@@ -2484,6 +2484,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
   const pendingCount  = items.filter(it => it.isPending && !it.saved && !it.skip).length;
   const newCount      = items.filter(it => !it.isPending && !it.saved && !it.skip).length;
   const unsavedMatch  = items.filter(it => !it.skip && !it.saved && !it.later && it.txnId);
+  const unreviewedItems = items.filter(it => !it.skip && !it.saved && !it.later);
   const inputStyle    = {background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:5,color:"#e2e4ec",padding:"5px 8px",fontSize:11,fontFamily:"inherit",boxSizing:"border-box"};
 
   const handleSaveOne = (i) => {
@@ -2664,6 +2665,17 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
           <button onClick={()=>onConfirm(items.filter(it=>!it.skip&&!it.saved&&!it.later))}
             style={{width:"100%",background:"#4ade80",border:"none",color:"#0a0b0f",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:"pointer",letterSpacing:1,marginTop:4}}>
             SAVE REMAINING {unsavedMatch.length} RECEIPT{unsavedMatch.length===1?"":"S"}
+          </button>
+        )}
+        {unreviewedItems.length > 0 && (
+          <button onClick={()=>{
+            unreviewedItems.forEach(it => onSaveLater(it));
+            setItems(prev => prev.map(it =>
+              (!it.skip && !it.saved && !it.later) ? {...it, later:true, editing:false} : it
+            ));
+          }}
+            style={{width:"100%",background:"#fbbf2410",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1,marginTop:8}}>
+            ⏸ SAVE ALL {unreviewedItems.length} TO LATER
           </button>
         )}
         <button onClick={onClose}
