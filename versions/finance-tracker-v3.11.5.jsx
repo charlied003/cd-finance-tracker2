@@ -315,7 +315,6 @@ const GMAIL_CLIENT_KEY    = "finance-tracker-gmail-client";
 const GMAIL_VERIFIER_KEY  = "finance-tracker-gmail-verifier";
 const GMAIL_PROCESSED_KEY = "finance-tracker-gmail-processed";
 const GMAIL_PENDING_KEY   = "finance-tracker-gmail-pending";
-const GMAIL_SENDER_MAP_KEY = "finance-tracker-gmail-senders";
 
 // PKCE helpers
 function pkceVerifier() {
@@ -1221,21 +1220,16 @@ root.render(React.createElement(App));
         catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
         if (order) {
           const oDate = new Date(order.orderDate || todayStr());
-          const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
-          const senderEmail = (from.match(/<(.+)>/)?.[1] || from).toLowerCase();
-          const knownDesc = senderMap[senderEmail] || "";
           const matched = [...transactions]
             .filter(t => t.amount < 0)
             .map(t => {
               const days   = Math.abs((new Date(t.date) - oDate) / 86400000);
               const amtPct = order.orderTotal ? Math.abs(Math.abs(t.amount) - order.orderTotal) / order.orderTotal : 1;
-              // Boost score if this sender was previously matched to this merchant
-              const senderBoost = knownDesc && t.description?.toLowerCase().includes(knownDesc.toLowerCase()) ? -2 : 0;
-              return { t, score: days * 0.3 + amtPct * 10 + senderBoost };
+              return { t, score: days * 0.3 + amtPct * 10 };
             })
             .filter(x => x.score < 6)
             .sort((a,b) => a.score - b.score)[0]?.t || null;
-          orders.push({ order, matchedTxn: matched, msgId: msg.id, from });
+          orders.push({ order, matchedTxn: matched, msgId: msg.id });
         } else {
           processed.add(msg.id);
         }
@@ -1244,13 +1238,8 @@ root.render(React.createElement(App));
       localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
       // Load pending items saved for later, prepend to results
       const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
-      const pendingOrders = pending.map(p => ({ order:p.order, matchedTxn:null, msgId:p.msgId, isPending:true, from:p.from||"" }));
-      // Sort: 0-value orders sink to bottom within each group
-      const sortByValue = arr => [...arr].sort((a,b) => {
-        const aZero = !a.order.orderTotal; const bZero = !b.order.orderTotal;
-        return aZero === bZero ? 0 : aZero ? 1 : -1;
-      });
-      const allOrders = [...sortByValue(pendingOrders), ...sortByValue(orders)];
+      const pendingOrders = pending.map(p => ({ order:p.order, matchedTxn:null, msgId:p.msgId, isPending:true }));
+      const allOrders = [...pendingOrders, ...orders];
       if (!allOrders.length) { showToast("No order confirmations found in new emails"); }
       else { setGmailModal({ orders: allOrders, processed }); }
     } catch(e) {
@@ -1506,19 +1495,10 @@ root.render(React.createElement(App));
         onSaveOne={(item) => {
           if (!item.txnId || !item.order.items?.length) return;
           setReceipts(prev => ({...prev, [item.txnId]: { items: item.order.items.map(i=>({name:i.name,qty:i.qty||1,amount:i.amount})) }}));
-          // Save sender→merchant mapping
-          if (item.from) {
-            const senderEmail = (item.from.match(/<(.+)>/)?.[1] || item.from).toLowerCase();
-            const matchedTx = transactions.find(t => t.id === item.txnId);
-            if (matchedTx) {
-              const senderMap = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
-              senderMap[senderEmail] = matchedTx.description;
-              localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
-            }
-          }
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
           processed.add(item.msgId);
           localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+          // Remove from pending if it was there
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p=>p.msgId!==item.msgId)));
           setGmailModal(prev => ({...prev, processed}));
@@ -1526,28 +1506,21 @@ root.render(React.createElement(App));
         }}
         onSaveLater={(item) => {
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
-          const updated = [...pending.filter(p=>p.msgId!==item.msgId), {order:item.order, msgId:item.msgId, from:item.from||""}];
+          const updated = [...pending.filter(p=>p.msgId!==item.msgId), {order:item.order, msgId:item.msgId}];
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(updated));
           showToast("Saved for later");
         }}
         onConfirm={(confirmed) => {
           const newReceipts = {...receipts};
           const processed   = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
-          const senderMap   = JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}");
-          confirmed.forEach(({order, txnId, msgId, from}) => {
+          confirmed.forEach(({order, txnId, msgId}) => {
             if (txnId && order.items?.length) {
               newReceipts[txnId] = { items: order.items.map(item => ({name:item.name,qty:item.qty||1,amount:item.amount})) };
-              // Save sender→merchant mapping for bulk confirms too
-              if (from) {
-                const senderEmail = (from.match(/<(.+)>/)?.[1] || from).toLowerCase();
-                const matchedTx = transactions.find(t => t.id === txnId);
-                if (matchedTx) senderMap[senderEmail] = matchedTx.description;
-              }
             }
             if (msgId) processed.add(msgId);
           });
-          localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap));
           gmailModal.orders.forEach(o => { if (!confirmed.find(c=>c.msgId===o.msgId)) processed.add(o.msgId); });
+          // Clear confirmed/skipped from pending
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p => !gmailModal.orders.find(o=>o.msgId===p.msgId))));
           setReceipts(newReceipts);
@@ -2405,7 +2378,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
       order: o.order, txnId: o.matchedTxn?.id||null, msgId: o.msgId,
       skip: false, later: false, saved: false,
       searching: false, search: "", editing: false,
-      isPending: o.isPending||false, from: o.from||"",
+      isPending: o.isPending||false,
     }))
   );
 
