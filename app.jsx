@@ -1087,7 +1087,7 @@ root.render(React.createElement(App));
           bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
           onExportCredentials={()=>{
             const cfg=window.MONZO_CONFIG||{};
-            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey,monzoClientId:cfg.clientId||"",monzoClientSecret:cfg.clientSecret||""};
+            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey,monzoClientId:cfg.clientId||"",monzoClientSecret:cfg.clientSecret||"",monzoRedirectUri:cfg.redirectUri||window.location.href.split("?")[0]};
             const a=document.createElement("a");a.href="data:application/json,"+encodeURIComponent(JSON.stringify(creds,null,2));a.download="finance-tracker-credentials.json";a.click();
           }}
           onImportCredentials={e=>{
@@ -1104,6 +1104,7 @@ root.render(React.createElement(App));
                   window.MONZO_CONFIG=window.MONZO_CONFIG||{};
                   if(c.monzoClientId) window.MONZO_CONFIG.clientId=c.monzoClientId;
                   if(c.monzoClientSecret) window.MONZO_CONFIG.clientSecret=c.monzoClientSecret;
+                  window.MONZO_CONFIG.redirectUri=c.monzoRedirectUri||window.location.href.split("?")[0];
                   setMonzoCfgReady(true);
                 }
                 showToast("Credentials imported");
