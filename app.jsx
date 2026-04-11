@@ -1098,6 +1098,7 @@ root.render(React.createElement(App));
                 const existing = await gistFindExisting(trimmed);
                 if (existing) { setGistId(existing.id); localStorage.setItem(GIST_ID_KEY, existing.id); showToast("Sync connected — existing data found"); }
                 else { showToast("Sync ready — will create gist on next save"); }
+                setSyncStatus("synced");
               } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
             } else { setGistId(""); localStorage.removeItem(GIST_ID_KEY); setSyncStatus("idle"); }
           }}
@@ -1119,8 +1120,15 @@ root.render(React.createElement(App));
                 const c=JSON.parse(txt);
                 if(c.starlingToken){setStarlingToken(c.starlingToken);localStorage.setItem(STARLING_TOKEN_KEY,c.starlingToken);}
                 if(c.starlingProxy){setStarlingProxy(c.starlingProxy);localStorage.setItem(STARLING_PROXY_KEY,c.starlingProxy);}
-                if(c.gistToken){setGistToken(c.gistToken);localStorage.setItem(GIST_TOKEN_KEY,c.gistToken);}
-                if(c.gistId){setGistId(c.gistId);localStorage.setItem(GIST_ID_KEY,c.gistId);}
+                if(c.gistToken){
+                  setGistToken(c.gistToken);localStorage.setItem(GIST_TOKEN_KEY,c.gistToken);
+                  if(c.gistId){setGistId(c.gistId);localStorage.setItem(GIST_ID_KEY,c.gistId);}
+                  setSyncStatus("syncing");
+                  gistFindExisting(c.gistToken).then(existing=>{
+                    if(existing){setGistId(existing.id);localStorage.setItem(GIST_ID_KEY,existing.id);}
+                    setSyncStatus("synced");
+                  }).catch(()=>setSyncStatus("error"));
+                }
                 if(c.anthropicKey){setApiKey(c.anthropicKey);}
                 if(c.monzoClientId){
                   const cfg={clientId:c.monzoClientId,redirectUri:c.monzoRedirectUri||window.location.href.split("?")[0]};

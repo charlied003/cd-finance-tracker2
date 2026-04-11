@@ -1279,6 +1279,7 @@ root.render(React.createElement(App));
               } else {
                 showToast("Sync ready \u2014 will create gist on next save");
               }
+              setSyncStatus("synced");
             } catch (e) {
               setSyncStatus("error");
               showToast("Could not connect to GitHub", "error");
@@ -1340,10 +1341,18 @@ root.render(React.createElement(App));
               if (c.gistToken) {
                 setGistToken(c.gistToken);
                 localStorage.setItem(GIST_TOKEN_KEY, c.gistToken);
-              }
-              if (c.gistId) {
-                setGistId(c.gistId);
-                localStorage.setItem(GIST_ID_KEY, c.gistId);
+                if (c.gistId) {
+                  setGistId(c.gistId);
+                  localStorage.setItem(GIST_ID_KEY, c.gistId);
+                }
+                setSyncStatus("syncing");
+                gistFindExisting(c.gistToken).then((existing) => {
+                  if (existing) {
+                    setGistId(existing.id);
+                    localStorage.setItem(GIST_ID_KEY, existing.id);
+                  }
+                  setSyncStatus("synced");
+                }).catch(() => setSyncStatus("error"));
               }
               if (c.anthropicKey) {
                 setApiKey(c.anthropicKey);
