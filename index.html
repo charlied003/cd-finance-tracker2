@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.11.7</title>
+<title>Finance Tracker v3.11.8</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -753,10 +753,33 @@ amount = price per single item.` }
     }
     return "";
   }
+  function gmailFocusedBody(rawBody, maxChars = 25e3) {
+    const stripped = rawBody.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
+    if (stripped.length <= maxChars) return stripped;
+    const anchors = [
+      "order summary",
+      "items in your order",
+      "your items",
+      "products ordered",
+      "order details",
+      "what you ordered",
+      "items ordered",
+      "your order"
+    ];
+    const lower = stripped.toLowerCase();
+    for (const anchor of anchors) {
+      const idx = lower.indexOf(anchor);
+      if (idx !== -1) {
+        const start = Math.max(0, idx - 2e3);
+        return stripped.slice(start, start + maxChars);
+      }
+    }
+    return stripped.slice(0, maxChars);
+  }
   function extractOrderFromEmail(subject, from, body, apiKey) {
     return __async(this, null, function* () {
       var _a, _b;
-      const clean = body.replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim().slice(0, 12e3);
+      const clean = gmailFocusedBody(body);
       const res = yield fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json", "anthropic-dangerous-direct-browser-access": "true" },

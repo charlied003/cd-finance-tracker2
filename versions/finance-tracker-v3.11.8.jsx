@@ -602,29 +602,8 @@ function gmailDecodeBody(payload) {
   return "";
 }
 
-function gmailFocusedBody(rawBody, maxChars = 25000) {
-  // Strip tags and normalise whitespace
-  const stripped = rawBody.replace(/<[^>]+>/g," ").replace(/&[a-z#0-9]+;/gi," ").replace(/\s+/g," ").trim();
-  if (stripped.length <= maxChars) return stripped;
-  // Try to find the items section so we don't waste the budget on header/footer boilerplate.
-  // Look for common order-summary anchor phrases (case-insensitive).
-  const anchors = ["order summary","items in your order","your items","products ordered",
-                   "order details","what you ordered","items ordered","your order"];
-  const lower = stripped.toLowerCase();
-  for (const anchor of anchors) {
-    const idx = lower.indexOf(anchor);
-    if (idx !== -1) {
-      // Take up to 2000 chars of context before the anchor (for header/date/total),
-      // then the full items section up to maxChars.
-      const start = Math.max(0, idx - 2000);
-      return stripped.slice(start, start + maxChars);
-    }
-  }
-  return stripped.slice(0, maxChars);
-}
-
 async function extractOrderFromEmail(subject, from, body, apiKey) {
-  const clean = gmailFocusedBody(body);
+  const clean = body.replace(/<[^>]+>/g," ").replace(/&[a-z]+;/gi," ").replace(/\s+/g," ").trim().slice(0,12000);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
     headers:{"x-api-key":apiKey,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
