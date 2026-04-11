@@ -672,8 +672,6 @@ export default function App() {
   const [starlingProxy, setStarlingProxy]   = useState("");
   const [bankSyncing, setBankSyncing]       = useState(false);
   const [gmailStatus, setGmailStatus]       = useState("disconnected"); // disconnected|connecting|connected
-  const [gmailClientId, setGmailClientId]   = useState(() => gmailCfg()?.clientId || "");
-  const [gmailClientSecret, setGmailClientSecret] = useState(() => gmailCfg()?.clientSecret || "");
   const [gmailSyncing, setGmailSyncing]     = useState(false);
   const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
@@ -816,20 +814,7 @@ const DEFAULT_RULES = {
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(async () => {
       try {
-        // Fetch remote first and merge receipts so no device ever loses another's receipts
-        let mergedReceipts = receipts;
-        try {
-          const remote = await gistFetch(gistToken, gistId);
-          if (remote.receipts) {
-            // Union: keep all remote receipts, local wins on same key
-            const combined = { ...remote.receipts, ...receipts };
-            if (Object.keys(combined).length > Object.keys(receipts).length) {
-              mergedReceipts = combined;
-              setReceipts(combined);
-            }
-          }
-        } catch(e) { /* ignore — just use local receipts */ }
-        const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs };
+        const data = { version: "2.1", merchantRules, receipts, accounts, cycleStart, pinnedSubs };
         const newId = await gistSave(gistToken, gistId, data);
         if (newId !== gistId) {
           setGistId(newId);
@@ -1163,57 +1148,27 @@ root.render(React.createElement(App));
     if (!apiKey) { showToast("Anthropic API key required for Gmail scan — set in Settings", "error"); return; }
     setGmailSyncing(true);
     try {
-      // Step 1: get valid token (refresh via proxy if expired)
-      const { access, expiry } = gmailTokens();
-      const tokenExpired = !access || Date.now() > expiry - 5*60*1000;
-      if (!access) { showToast("Gmail not connected — reconnect in Settings", "error"); setGmailSyncing(false); return; }
-      if (!starlingProxy && tokenExpired) { showToast("Token expired but no proxy URL set — add Starling proxy in Settings", "error"); setGmailSyncing(false); return; }
-      let token;
-      try {
-        token = await gmailGetValidToken(starlingProxy);
-      } catch(e) {
-        const detail = e.message === "GMAIL_REFRESH_FAILED"
-          ? `Token refresh failed — proxy: ${starlingProxy||"(not set)"}`
-          : e.message;
-        showToast(`Gmail auth failed: ${detail}`, "error"); setGmailSyncing(false); return;
-      }
-
-      // Step 2: find label
-      let label;
-      try {
-        label = await gmailFindLabel(token, "receipts");
-      } catch(e) {
-        showToast(`Gmail labels fetch failed: ${e.message}`, "error"); setGmailSyncing(false); return;
-      }
+      const token = await gmailGetValidToken(starlingProxy);
+      const label = await gmailFindLabel(token, "receipts");
       if (!label) { showToast("Gmail label 'receipts' not found — check it exists", "error"); setGmailSyncing(false); return; }
 
-      // Step 3: list messages
       const processed = new Set(JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY)||"[]"));
-      let messages;
-      try {
-        messages = await gmailListMessages(token, label.id, 50);
-      } catch(e) {
-        showToast(`Gmail messages fetch failed: ${e.message}`, "error"); setGmailSyncing(false); return;
-      }
-      const newMsgs = messages.filter(m => !processed.has(m.id));
+      const messages  = await gmailListMessages(token, label.id, 50);
+      const newMsgs   = messages.filter(m => !processed.has(m.id));
+
       if (!newMsgs.length) { showToast("No new emails in receipts label"); setGmailSyncing(false); return; }
 
       showToast(`Scanning ${Math.min(newMsgs.length,20)} email${newMsgs.length===1?"":"s"}…`);
       const orders = [];
       for (const msg of newMsgs.slice(0,20)) {
-        // Step 4: fetch each message
-        let full;
-        try { full = await gmailGetMessage(token, msg.id); }
-        catch(e) { showToast(`Fetch message failed: ${e.message}`, "error"); setGmailSyncing(false); return; }
+        const full    = await gmailGetMessage(token, msg.id);
         const hdrs    = full.payload?.headers || [];
         const subject = hdrs.find(h=>h.name==="Subject")?.value || "";
         const from    = hdrs.find(h=>h.name==="From")?.value || "";
         const body    = gmailDecodeBody(full.payload);
-        // Step 5: AI extraction
-        let order;
-        try { order = await extractOrderFromEmail(subject, from, body, apiKey); }
-        catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); return; }
+        const order   = await extractOrderFromEmail(subject, from, body, apiKey);
         if (order) {
+          // Match by amount proximity + date proximity (within 5 days)
           const oDate = new Date(order.orderDate || todayStr());
           const matched = [...transactions]
             .filter(t => t.amount < 0)
@@ -1226,14 +1181,15 @@ root.render(React.createElement(App));
             .sort((a,b) => a.score - b.score)[0]?.t || null;
           orders.push({ order, matchedTxn: matched, msgId: msg.id });
         } else {
-          processed.add(msg.id);
+          processed.add(msg.id); // not an order — mark so we skip next time
         }
       }
+      // Save processed non-orders
       localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+
       if (!orders.length) { showToast("No order confirmations found in new emails"); }
       else { setGmailModal({ orders, processed }); }
     } catch(e) {
-      console.error("[Gmail scan] unexpected error:", e);
       showToast(`Gmail scan failed: ${e.message}`, "error");
     }
     setGmailSyncing(false);
@@ -1389,8 +1345,6 @@ root.render(React.createElement(App));
           starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
           monzoCfgReady={monzoCfgReady}
           gmailStatus={gmailStatus} onGmailConnect={connectGmail} onGmailDisconnect={()=>{gmailClearTokens();setGmailStatus("disconnected");showToast("Gmail disconnected");}}
-          gmailClientId={gmailClientId} onGmailClientIdChange={setGmailClientId}
-          gmailClientSecret={gmailClientSecret} onGmailClientSecretChange={setGmailClientSecret}
           bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
           onExportCredentials={()=>{
             const mc=window.MONZO_CONFIG||{};
@@ -1429,8 +1383,6 @@ root.render(React.createElement(App));
                 if(c.gmailClientId){
                   const gcfg={clientId:c.gmailClientId,clientSecret:c.gmailClientSecret||"",redirectUri:c.gmailRedirectUri||window.location.href.split("?")[0]};
                   gmailSaveCfg(gcfg);
-                  setGmailClientId(c.gmailClientId);
-                  setGmailClientSecret(c.gmailClientSecret||"");
                   if(localStorage.getItem(GMAIL_ACCESS_KEY)) setGmailStatus("connected");
                 }
                 showToast("Credentials imported");
@@ -2440,7 +2392,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,gistId,onGistTokenSave,onGistIdSave,onSyncNow,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady,gmailStatus,onGmailConnect,onGmailDisconnect,gmailClientId,onGmailClientIdChange,gmailClientSecret,onGmailClientSecretChange}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,gistId,onGistTokenSave,onGistIdSave,onSyncNow,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady,gmailStatus,onGmailConnect,onGmailDisconnect}) {
   const credImportRef = useRef();
   const [val,setVal]                   = useState(cycleStart);
   const [keyInput,setKeyInput]         = useState(apiKey||"");
@@ -2452,6 +2404,8 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
   const [showGistCfg,setShowGistCfg]   = useState(false);
   const [showApiCfg,setShowApiCfg]     = useState(false);
   const [showGmailCfg,setShowGmailCfg] = useState(false);
+  const [gmailClientId,setGmailClientId]     = useState(()=>gmailCfg()?.clientId||"");
+  const [gmailClientSecret,setGmailClientSecret] = useState(()=>gmailCfg()?.clientSecret||"");
 
   const starlingOk   = Boolean(starlingToken && starlingProxy);
   const monzoOk      = monzoCfgReady && monzoStatus === "connected";
@@ -2571,9 +2525,7 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
                 ? <button onClick={onGmailDisconnect} style={{background:"none",border:"none",color:"#f87171",fontSize:11,cursor:"pointer",padding:0,letterSpacing:1}}>disconnect</button>
                 : <button onClick={()=>{
                     const redirectUri = window.location.href.split("?")[0];
-                    const id = gmailClientId.trim(); const sec = gmailClientSecret.trim();
-                    gmailSaveCfg({clientId:id,clientSecret:sec,redirectUri});
-                    onGmailClientIdChange(id); onGmailClientSecretChange(sec);
+                    gmailSaveCfg({clientId:gmailClientId.trim(),clientSecret:gmailClientSecret.trim(),redirectUri});
                     onGmailConnect();
                   }} style={{background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:7,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:"pointer",letterSpacing:1}}>CONNECT</button>
               }
@@ -2583,8 +2535,8 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
           {showGmailCfg&&(
             <div style={{marginTop:10}}>
               <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>Google OAuth credentials — create at console.cloud.google.com, enable Gmail API, add Web application client.</div>
-              <input type="password" value={gmailClientId} onChange={e=>onGmailClientIdChange(e.target.value)} placeholder="Google Client ID" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientId?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
-              <input type="password" value={gmailClientSecret} onChange={e=>onGmailClientSecretChange(e.target.value)} placeholder="Google Client Secret" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientSecret?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
+              <input type="password" value={gmailClientId} onChange={e=>setGmailClientId(e.target.value)} placeholder="Google Client ID" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientId?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
+              <input type="password" value={gmailClientSecret} onChange={e=>setGmailClientSecret(e.target.value)} placeholder="Google Client Secret" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientSecret?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
               <div style={{fontSize:10,color:"#4b5563",lineHeight:1.5}}>Authorised redirect URI to add in Google Console: <span style={{color:"#94a3b8",wordBreak:"break-all"}}>{window.location.href.split("?")[0]}</span></div>
             </div>
           )}

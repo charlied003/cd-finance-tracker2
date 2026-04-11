@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.10</title>
+<title>Finance Tracker v3.11</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -840,6 +840,14 @@ ${clean}` }]
     const [starlingProxy, setStarlingProxy] = useState("");
     const [bankSyncing, setBankSyncing] = useState(false);
     const [gmailStatus, setGmailStatus] = useState("disconnected");
+    const [gmailClientId, setGmailClientId] = useState(() => {
+      var _a;
+      return ((_a = gmailCfg()) == null ? void 0 : _a.clientId) || "";
+    });
+    const [gmailClientSecret, setGmailClientSecret] = useState(() => {
+      var _a;
+      return ((_a = gmailCfg()) == null ? void 0 : _a.clientSecret) || "";
+    });
     const [gmailSyncing, setGmailSyncing] = useState(false);
     const [gmailModal, setGmailModal] = useState(null);
     const [devServices, setDevServices] = useState(() => {
@@ -987,7 +995,19 @@ ${clean}` }]
       if (syncTimer.current) clearTimeout(syncTimer.current);
       syncTimer.current = setTimeout(() => __async(null, null, function* () {
         try {
-          const data = { version: "2.1", merchantRules, receipts, accounts, cycleStart, pinnedSubs };
+          let mergedReceipts = receipts;
+          try {
+            const remote = yield gistFetch(gistToken, gistId);
+            if (remote.receipts) {
+              const combined = __spreadValues(__spreadValues({}, remote.receipts), receipts);
+              if (Object.keys(combined).length > Object.keys(receipts).length) {
+                mergedReceipts = combined;
+                setReceipts(combined);
+              }
+            }
+          } catch (e) {
+          }
+          const data = { version: "2.1", merchantRules, receipts: mergedReceipts, accounts, cycleStart, pinnedSubs };
           const newId = yield gistSave(gistToken, gistId, data);
           if (newId !== gistId) {
             setGistId(newId);
@@ -1370,15 +1390,49 @@ root.render(React.createElement(App));
         }
         setGmailSyncing(true);
         try {
-          const token = yield gmailGetValidToken(starlingProxy);
-          const label = yield gmailFindLabel(token, "receipts");
+          const { access, expiry } = gmailTokens();
+          const tokenExpired = !access || Date.now() > expiry - 5 * 60 * 1e3;
+          if (!access) {
+            showToast("Gmail not connected \u2014 reconnect in Settings", "error");
+            setGmailSyncing(false);
+            return;
+          }
+          if (!starlingProxy && tokenExpired) {
+            showToast("Token expired but no proxy URL set \u2014 add Starling proxy in Settings", "error");
+            setGmailSyncing(false);
+            return;
+          }
+          let token;
+          try {
+            token = yield gmailGetValidToken(starlingProxy);
+          } catch (e) {
+            const detail = e.message === "GMAIL_REFRESH_FAILED" ? `Token refresh failed \u2014 proxy: ${starlingProxy || "(not set)"}` : e.message;
+            showToast(`Gmail auth failed: ${detail}`, "error");
+            setGmailSyncing(false);
+            return;
+          }
+          let label;
+          try {
+            label = yield gmailFindLabel(token, "receipts");
+          } catch (e) {
+            showToast(`Gmail labels fetch failed: ${e.message}`, "error");
+            setGmailSyncing(false);
+            return;
+          }
           if (!label) {
             showToast("Gmail label 'receipts' not found \u2014 check it exists", "error");
             setGmailSyncing(false);
             return;
           }
           const processed = new Set(JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY) || "[]"));
-          const messages = yield gmailListMessages(token, label.id, 50);
+          let messages;
+          try {
+            messages = yield gmailListMessages(token, label.id, 50);
+          } catch (e) {
+            showToast(`Gmail messages fetch failed: ${e.message}`, "error");
+            setGmailSyncing(false);
+            return;
+          }
           const newMsgs = messages.filter((m) => !processed.has(m.id));
           if (!newMsgs.length) {
             showToast("No new emails in receipts label");
@@ -1388,12 +1442,26 @@ root.render(React.createElement(App));
           showToast(`Scanning ${Math.min(newMsgs.length, 20)} email${newMsgs.length === 1 ? "" : "s"}\u2026`);
           const orders = [];
           for (const msg of newMsgs.slice(0, 20)) {
-            const full = yield gmailGetMessage(token, msg.id);
+            let full;
+            try {
+              full = yield gmailGetMessage(token, msg.id);
+            } catch (e) {
+              showToast(`Fetch message failed: ${e.message}`, "error");
+              setGmailSyncing(false);
+              return;
+            }
             const hdrs = ((_a = full.payload) == null ? void 0 : _a.headers) || [];
             const subject = ((_b = hdrs.find((h) => h.name === "Subject")) == null ? void 0 : _b.value) || "";
             const from = ((_c = hdrs.find((h) => h.name === "From")) == null ? void 0 : _c.value) || "";
             const body = gmailDecodeBody(full.payload);
-            const order = yield extractOrderFromEmail(subject, from, body, apiKey);
+            let order;
+            try {
+              order = yield extractOrderFromEmail(subject, from, body, apiKey);
+            } catch (e) {
+              showToast(`AI extraction failed: ${e.message}`, "error");
+              setGmailSyncing(false);
+              return;
+            }
             if (order) {
               const oDate = new Date(order.orderDate || todayStr());
               const matched = ((_d = [...transactions].filter((t) => t.amount < 0).map((t) => {
@@ -1413,6 +1481,7 @@ root.render(React.createElement(App));
             setGmailModal({ orders, processed });
           }
         } catch (e) {
+          console.error("[Gmail scan] unexpected error:", e);
           showToast(`Gmail scan failed: ${e.message}`, "error");
         }
         setGmailSyncing(false);
@@ -1651,6 +1720,10 @@ root.render(React.createElement(App));
           setGmailStatus("disconnected");
           showToast("Gmail disconnected");
         },
+        gmailClientId,
+        onGmailClientIdChange: setGmailClientId,
+        gmailClientSecret,
+        onGmailClientSecretChange: setGmailClientSecret,
         bankSyncing,
         onSyncStarling: syncStarling,
         onSyncMonzo: syncMonzo,
@@ -1719,6 +1792,8 @@ root.render(React.createElement(App));
               if (c.gmailClientId) {
                 const gcfg = { clientId: c.gmailClientId, clientSecret: c.gmailClientSecret || "", redirectUri: c.gmailRedirectUri || window.location.href.split("?")[0] };
                 gmailSaveCfg(gcfg);
+                setGmailClientId(c.gmailClientId);
+                setGmailClientSecret(c.gmailClientSecret || "");
                 if (localStorage.getItem(GMAIL_ACCESS_KEY)) setGmailStatus("connected");
               }
               showToast("Credentials imported");
@@ -2339,7 +2414,7 @@ root.render(React.createElement(App));
       confirmed.length === 1 ? "" : "S"
     )));
   }
-  function SettingsModal({ cycleStart, onSave, onClose, apiKey, onApiKeySave, gistToken, gistId, onGistTokenSave, onGistIdSave, onSyncNow, syncStatus, monzoStatus, onMonzoConnect, onMonzoDisconnect, starlingToken, onStarlingTokenSave, starlingProxy, onStarlingProxySave, bankSyncing, onSyncStarling, onSyncMonzo, onExportCredentials, onImportCredentials, monzoCfgReady, gmailStatus, onGmailConnect, onGmailDisconnect }) {
+  function SettingsModal({ cycleStart, onSave, onClose, apiKey, onApiKeySave, gistToken, gistId, onGistTokenSave, onGistIdSave, onSyncNow, syncStatus, monzoStatus, onMonzoConnect, onMonzoDisconnect, starlingToken, onStarlingTokenSave, starlingProxy, onStarlingProxySave, bankSyncing, onSyncStarling, onSyncMonzo, onExportCredentials, onImportCredentials, monzoCfgReady, gmailStatus, onGmailConnect, onGmailDisconnect, gmailClientId, onGmailClientIdChange, gmailClientSecret, onGmailClientSecretChange }) {
     const credImportRef = useRef();
     const [val, setVal] = useState(cycleStart);
     const [keyInput, setKeyInput] = useState(apiKey || "");
@@ -2351,14 +2426,6 @@ root.render(React.createElement(App));
     const [showGistCfg, setShowGistCfg] = useState(false);
     const [showApiCfg, setShowApiCfg] = useState(false);
     const [showGmailCfg, setShowGmailCfg] = useState(false);
-    const [gmailClientId, setGmailClientId] = useState(() => {
-      var _a;
-      return ((_a = gmailCfg()) == null ? void 0 : _a.clientId) || "";
-    });
-    const [gmailClientSecret, setGmailClientSecret] = useState(() => {
-      var _a;
-      return ((_a = gmailCfg()) == null ? void 0 : _a.clientSecret) || "";
-    });
     const starlingOk = Boolean(starlingToken && starlingProxy);
     const monzoOk = monzoCfgReady && monzoStatus === "connected";
     const days = Array.from({ length: 28 }, (_, i) => i + 1);
@@ -2380,9 +2447,13 @@ root.render(React.createElement(App));
       return (_a = credImportRef.current) == null ? void 0 : _a.click();
     }, style: { flex: 1, background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 7, padding: "10px", fontWeight: 700, fontSize: 12, cursor: "pointer", letterSpacing: 1 } }, "\u2191 IMPORT")), /* @__PURE__ */ React.createElement("input", { ref: credImportRef, type: "file", accept: "application/json,.json", style: { display: "none" }, onChange: onImportCredentials })), /* @__PURE__ */ React.createElement(Row, { label: "Bank Sync" }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0a0b0f", border: "1px solid #1c1f2e", borderRadius: 8, padding: "12px 14px", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: starlingOk || showStarlingCfg ? 8 : 0 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#60a5fa", marginBottom: 4 } }, "Starling"), /* @__PURE__ */ React.createElement(Chip, { ok: starlingOk, label: starlingOk ? "Ready" : "Not configured" })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, starlingOk && /* @__PURE__ */ React.createElement("button", { onClick: onSyncStarling, disabled: bankSyncing, style: { background: bankSyncing ? "#1c1f2e" : "#4ade8015", border: `1px solid ${bankSyncing ? "#2a2d3a" : "#4ade8040"}`, color: bankSyncing ? "#4b5563" : "#4ade80", borderRadius: 7, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: bankSyncing ? "default" : "pointer", letterSpacing: 1 } }, bankSyncing ? "\u27F3" : "\u2193 SYNC"), /* @__PURE__ */ React.createElement(CfgToggle, { open: showStarlingCfg, onToggle: () => setShowStarlingCfg((v) => !v) }))), showStarlingCfg && /* @__PURE__ */ React.createElement("div", { style: { borderTop: "1px solid #1c1f2e", paddingTop: 12, marginTop: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "Personal access token from developer.starlingbank.com"), /* @__PURE__ */ React.createElement("input", { type: "password", value: starlingInput, onChange: (e) => setStarlingInput(e.target.value), placeholder: "eyJ...", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${starlingInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onStarlingTokenSave(starlingInput), active: Boolean(starlingInput), label: "SAVE TOKEN" }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 12, marginBottom: 6, lineHeight: 1.5 } }, "Cloudflare proxy URL (deploy worker.js)"), /* @__PURE__ */ React.createElement("input", { value: proxyInput, onChange: (e) => setProxyInput(e.target.value), placeholder: "https://....workers.dev", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${proxyInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onStarlingProxySave(proxyInput), active: Boolean(proxyInput), label: "SAVE PROXY URL" }))), /* @__PURE__ */ React.createElement("div", { style: { background: "#0a0b0f", border: "1px solid #1c1f2e", borderRadius: 8, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#4ade80", marginBottom: 4 } }, "Monzo"), /* @__PURE__ */ React.createElement(Chip, { ok: monzoOk, label: !monzoCfgReady ? "Not configured" : monzoStatus === "connecting" ? "Connecting..." : monzoStatus === "connected" ? "Connected" : monzoStatus === "expired" ? "Session expired" : "Disconnected" })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, monzoOk && /* @__PURE__ */ React.createElement("button", { onClick: onSyncMonzo, disabled: bankSyncing, style: { background: bankSyncing ? "#1c1f2e" : "#4ade8015", border: `1px solid ${bankSyncing ? "#2a2d3a" : "#4ade8040"}`, color: bankSyncing ? "#4b5563" : "#4ade80", borderRadius: 7, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: bankSyncing ? "default" : "pointer", letterSpacing: 1 } }, bankSyncing ? "\u27F3" : "\u2193 SYNC"), monzoCfgReady && monzoStatus === "connected" && /* @__PURE__ */ React.createElement("button", { onClick: onMonzoDisconnect, style: { background: "none", border: "none", color: "#f87171", fontSize: 11, cursor: "pointer", padding: 0, letterSpacing: 1 } }, "disconnect"), monzoCfgReady && monzoStatus !== "connected" && monzoStatus !== "connecting" && /* @__PURE__ */ React.createElement("button", { onClick: onMonzoConnect, style: { background: "#4ade8015", border: "1px solid #4ade8040", color: "#4ade80", borderRadius: 7, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: 1 } }, "CONNECT"), monzoStatus === "connecting" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#fbbf24" } }, "\u27F3"))), !monzoCfgReady && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 8, lineHeight: 1.5 } }, "Import credentials or rebuild with config.js to enable Monzo OAuth."))), /* @__PURE__ */ React.createElement(Row, { label: "Gmail Receipts" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Chip, { ok: gmailStatus === "connected", label: gmailStatus === "connected" ? "Connected" : "Not configured" }), gmailStatus === "connecting" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#fbbf24", marginLeft: 8 } }, "\u27F3 Connecting\u2026")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, gmailStatus === "connected" ? /* @__PURE__ */ React.createElement("button", { onClick: onGmailDisconnect, style: { background: "none", border: "none", color: "#f87171", fontSize: 11, cursor: "pointer", padding: 0, letterSpacing: 1 } }, "disconnect") : /* @__PURE__ */ React.createElement("button", { onClick: () => {
       const redirectUri = window.location.href.split("?")[0];
-      gmailSaveCfg({ clientId: gmailClientId.trim(), clientSecret: gmailClientSecret.trim(), redirectUri });
+      const id = gmailClientId.trim();
+      const sec = gmailClientSecret.trim();
+      gmailSaveCfg({ clientId: id, clientSecret: sec, redirectUri });
+      onGmailClientIdChange(id);
+      onGmailClientSecretChange(sec);
       onGmailConnect();
-    }, style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 7, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: 1 } }, "CONNECT"), /* @__PURE__ */ React.createElement(CfgToggle, { open: showGmailCfg, onToggle: () => setShowGmailCfg((v) => !v) }))), showGmailCfg && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "Google OAuth credentials \u2014 create at console.cloud.google.com, enable Gmail API, add Web application client."), /* @__PURE__ */ React.createElement("input", { type: "password", value: gmailClientId, onChange: (e) => setGmailClientId(e.target.value), placeholder: "Google Client ID", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gmailClientId ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box", marginBottom: 6 } }), /* @__PURE__ */ React.createElement("input", { type: "password", value: gmailClientSecret, onChange: (e) => setGmailClientSecret(e.target.value), placeholder: "Google Client Secret", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gmailClientSecret ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box", marginBottom: 6 } }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", lineHeight: 1.5 } }, "Authorised redirect URI to add in Google Console: ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8", wordBreak: "break-all" } }, window.location.href.split("?")[0]))), !showGmailCfg && gmailStatus !== "connected" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 6, lineHeight: 1.5 } }, 'Connect to scan your Gmail "receipts" label and auto-extract order items. Scans appear in the Receipts tab.')), /* @__PURE__ */ React.createElement(Row, { label: "GitHub Sync" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(Chip, { ok: Boolean(gistToken), label: gistToken ? "Connected" : "Not configured" }), gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24" } }, syncStatus === "synced" ? "\u2713 Synced" : syncStatus === "error" ? "\u2717 Error" : "\u27F3 Syncing..."), gistToken && /* @__PURE__ */ React.createElement("button", { onClick: onSyncNow, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", borderRadius: 5, padding: "4px 8px", color: "#60a5fa", fontSize: 10, cursor: "pointer", fontFamily: "inherit", letterSpacing: 1 } }, "SYNC NOW")), /* @__PURE__ */ React.createElement(CfgToggle, { open: showGistCfg, onToggle: () => setShowGistCfg((v) => !v) })), showGistCfg && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "GitHub Personal Access Token with ", /* @__PURE__ */ React.createElement("strong", null, "gist"), " scope \u2014 syncs rules, receipts & subscriptions across devices."), /* @__PURE__ */ React.createElement("input", { type: "password", value: gistInput, onChange: (e) => setGistInput(e.target.value), placeholder: "ghp_...", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gistInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onGistTokenSave(gistInput), active: Boolean(gistInput), label: "SAVE & CONNECT" }), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid #1c1f2e", paddingTop: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6 } }, "Gist ID \u2014 copy this to your other device if sync isn't finding the right gist."), gistId && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("code", { style: { flex: 1, background: "#0a0b0f", border: "1px solid #2a2d3a", borderRadius: 5, padding: "6px 8px", fontSize: 10, color: "#94a3b8", wordBreak: "break-all" } }, gistId), /* @__PURE__ */ React.createElement("button", { onClick: () => {
+    }, style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 7, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", letterSpacing: 1 } }, "CONNECT"), /* @__PURE__ */ React.createElement(CfgToggle, { open: showGmailCfg, onToggle: () => setShowGmailCfg((v) => !v) }))), showGmailCfg && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "Google OAuth credentials \u2014 create at console.cloud.google.com, enable Gmail API, add Web application client."), /* @__PURE__ */ React.createElement("input", { type: "password", value: gmailClientId, onChange: (e) => onGmailClientIdChange(e.target.value), placeholder: "Google Client ID", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gmailClientId ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box", marginBottom: 6 } }), /* @__PURE__ */ React.createElement("input", { type: "password", value: gmailClientSecret, onChange: (e) => onGmailClientSecretChange(e.target.value), placeholder: "Google Client Secret", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gmailClientSecret ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box", marginBottom: 6 } }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", lineHeight: 1.5 } }, "Authorised redirect URI to add in Google Console: ", /* @__PURE__ */ React.createElement("span", { style: { color: "#94a3b8", wordBreak: "break-all" } }, window.location.href.split("?")[0]))), !showGmailCfg && gmailStatus !== "connected" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 6, lineHeight: 1.5 } }, 'Connect to scan your Gmail "receipts" label and auto-extract order items. Scans appear in the Receipts tab.')), /* @__PURE__ */ React.createElement(Row, { label: "GitHub Sync" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement(Chip, { ok: Boolean(gistToken), label: gistToken ? "Connected" : "Not configured" }), gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24" } }, syncStatus === "synced" ? "\u2713 Synced" : syncStatus === "error" ? "\u2717 Error" : "\u27F3 Syncing..."), gistToken && /* @__PURE__ */ React.createElement("button", { onClick: onSyncNow, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", borderRadius: 5, padding: "4px 8px", color: "#60a5fa", fontSize: 10, cursor: "pointer", fontFamily: "inherit", letterSpacing: 1 } }, "SYNC NOW")), /* @__PURE__ */ React.createElement(CfgToggle, { open: showGistCfg, onToggle: () => setShowGistCfg((v) => !v) })), showGistCfg && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "GitHub Personal Access Token with ", /* @__PURE__ */ React.createElement("strong", null, "gist"), " scope \u2014 syncs rules, receipts & subscriptions across devices."), /* @__PURE__ */ React.createElement("input", { type: "password", value: gistInput, onChange: (e) => setGistInput(e.target.value), placeholder: "ghp_...", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gistInput ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onGistTokenSave(gistInput), active: Boolean(gistInput), label: "SAVE & CONNECT" }), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, borderTop: "1px solid #1c1f2e", paddingTop: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6 } }, "Gist ID \u2014 copy this to your other device if sync isn't finding the right gist."), gistId && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("code", { style: { flex: 1, background: "#0a0b0f", border: "1px solid #2a2d3a", borderRadius: 5, padding: "6px 8px", fontSize: 10, color: "#94a3b8", wordBreak: "break-all" } }, gistId), /* @__PURE__ */ React.createElement("button", { onClick: () => {
       navigator.clipboard.writeText(gistId).then(() => alert("Gist ID copied!"));
     }, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", borderRadius: 5, padding: "6px 8px", color: "#6b7280", fontSize: 10, cursor: "pointer", whiteSpace: "nowrap" } }, "COPY")), !gistId && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", fontStyle: "italic", marginBottom: 8 } }, "No gist ID yet \u2014 will be created on next save."), /* @__PURE__ */ React.createElement("input", { value: gistIdInput, onChange: (e) => setGistIdInput(e.target.value), placeholder: "Paste gist ID from another device...", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${gistIdInput && gistIdInput !== gistId ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onGistIdSave(gistIdInput), active: Boolean(gistIdInput && gistIdInput !== gistId), label: "USE THIS GIST ID" })))), /* @__PURE__ */ React.createElement(Row, { label: "AI (Anthropic)" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement(Chip, { ok: Boolean(apiKey), label: apiKey ? "Key saved" : "Not configured" }), /* @__PURE__ */ React.createElement(CfgToggle, { open: showApiCfg, onToggle: () => setShowApiCfg((v) => !v) })), showApiCfg && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6, lineHeight: 1.5 } }, "Anthropic API key for AI categorisation & receipt scanning. platform.anthropic.com \u2192 API Keys."), /* @__PURE__ */ React.createElement("input", { type: "password", value: keyInput, onChange: (e) => setKeyInput(e.target.value), placeholder: "sk-ant-...", style: { width: "100%", background: "#1c1f2e", border: `1.5px solid ${keyInput ? "#fbbf24" : "#2a2d3a"}`, borderRadius: 7, padding: "9px 10px", color: "#e2e4ec", fontSize: 12, outline: "none", boxSizing: "border-box" } }), /* @__PURE__ */ React.createElement(SaveBtn, { onClick: () => onApiKeySave(keyInput.trim()), active: Boolean(keyInput), color: "#fbbf24", label: "SAVE KEY" }))), /* @__PURE__ */ React.createElement(Row, { label: "Pay Cycle", border: false }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginBottom: 12, lineHeight: 1.6 } }, "Period runs from the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(val)), " to the ", /* @__PURE__ */ React.createElement("strong", { style: { color: "#94a3b8" } }, ordinal(endDay)), " of the following month."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 } }, days.map((d) => /* @__PURE__ */ React.createElement("button", { key: d, onClick: () => setVal(d), style: { width: 44, height: 36, background: val === d ? "#60a5fa" : "#1c1f2e", color: val === d ? "#0a0b0f" : "#6b7280", border: `1px solid ${val === d ? "#60a5fa" : "#2a2d3a"}`, borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, d))), /* @__PURE__ */ React.createElement("button", { onClick: () => onSave(val), style: { width: "100%", background: "#4ade80", border: "none", color: "#0a0b0f", borderRadius: 8, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", letterSpacing: 1 } }, "SAVE \u2014 ", ordinal(val), " TO ", ordinal(endDay)))));
   }
