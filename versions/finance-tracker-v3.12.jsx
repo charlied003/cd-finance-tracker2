@@ -583,47 +583,48 @@ async function gmailGetMessage(token, msgId) {
   return res.json();
 }
 
-function gmailDecodeBody(payload, _depth=0) {
+function gmailDecodeBody(payload) {
   if (!payload) return "";
   if (payload.body?.data) { try { return atob(payload.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch { return ""; } }
   if (payload.parts) {
+    // Collect both plain and html — return whichever is richer
     const plain = payload.parts.find(p => p.mimeType==="text/plain");
     const html  = payload.parts.find(p => p.mimeType==="text/html");
-    const plainText = plain ? gmailDecodeBody(plain, _depth+1) : "";
-    const htmlText  = html  ? gmailDecodeBody(html,  _depth+1) : "";
-    if (_depth === 0) console.log("[Gmail body] plain:", plainText.length, "chars | html:", htmlText.length, "chars");
+    const plainText = plain ? gmailDecodeBody(plain) : "";
+    const htmlText  = html  ? gmailDecodeBody(html)  : "";
+    // Prefer plain if it's substantial; otherwise fall back to HTML (Amazon, etc. have sparse plain text)
     if (plainText.length >= 500) return plainText;
     if (htmlText.length  > plainText.length) return htmlText;
     if (plainText) return plainText;
-    for (const p of payload.parts) { const t=gmailDecodeBody(p, _depth+1); if(t) return t; }
+    // Recurse into other parts (e.g. multipart/alternative nested inside multipart/mixed)
+    for (const p of payload.parts) { const t=gmailDecodeBody(p); if(t) return t; }
   }
   return "";
 }
 
-function gmailFocusedBody(rawBody, maxChars = 40000) {
+function gmailFocusedBody(rawBody, maxChars = 25000) {
+  // Strip tags and normalise whitespace
   const stripped = rawBody.replace(/<[^>]+>/g," ").replace(/&[a-z#0-9]+;/gi," ").replace(/\s+/g," ").trim();
-  console.log("[Gmail body] stripped length:", stripped.length, "| maxChars:", maxChars);
   if (stripped.length <= maxChars) return stripped;
+  // Try to find the items section so we don't waste the budget on header/footer boilerplate.
+  // Look for common order-summary anchor phrases (case-insensitive).
   const anchors = ["order summary","items in your order","your items","products ordered",
-                   "order details","what you ordered","items ordered","your order",
-                   "order confirmation","items you ordered","purchase summary"];
+                   "order details","what you ordered","items ordered","your order"];
   const lower = stripped.toLowerCase();
   for (const anchor of anchors) {
     const idx = lower.indexOf(anchor);
     if (idx !== -1) {
+      // Take up to 2000 chars of context before the anchor (for header/date/total),
+      // then the full items section up to maxChars.
       const start = Math.max(0, idx - 2000);
-      console.log("[Gmail body] anchor found:", JSON.stringify(anchor), "at", idx, "→ slicing", start, "-", start+maxChars);
       return stripped.slice(start, start + maxChars);
     }
   }
-  console.log("[Gmail body] no anchor found — using first", maxChars, "chars");
   return stripped.slice(0, maxChars);
 }
 
 async function extractOrderFromEmail(subject, from, body, apiKey) {
   const clean = gmailFocusedBody(body);
-  console.log("[Gmail extract] from:", from, "| subject:", subject, "| clean body chars:", clean.length);
-  console.log("[Gmail extract] body preview:", clean.slice(0, 300));
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
     headers:{"x-api-key":apiKey,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
@@ -640,7 +641,6 @@ ${clean}`}],
   });
   const data = await res.json();
   const text = (data.content?.[0]?.text||"").trim();
-  console.log("[Gmail extract] AI response:", text.slice(0, 500));
   if (text==="null"||!text) return null;
   try { const m=text.match(/\{[\s\S]*\}/); return m?JSON.parse(m[0]):null; } catch { return null; }
 }
