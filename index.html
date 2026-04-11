@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.11.6</title>
+<title>Finance Tracker v3.11.7</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -411,6 +411,7 @@ amount = price per single item.` }
   const GMAIL_PROCESSED_KEY = "finance-tracker-gmail-processed";
   const GMAIL_PENDING_KEY = "finance-tracker-gmail-pending";
   const GMAIL_SENDER_MAP_KEY = "finance-tracker-gmail-senders";
+  const GMAIL_SAVED_KEY = "finance-tracker-gmail-saved";
   function pkceVerifier() {
     const arr = new Uint8Array(32);
     crypto.getRandomValues(arr);
@@ -1642,8 +1643,10 @@ root.render(React.createElement(App));
         gmailProgress,
         onScanGmail: scanGmailEmails,
         onResetGmailHistory: () => {
-          localStorage.removeItem(GMAIL_PROCESSED_KEY);
-          showToast("Gmail scan history cleared \u2014 next scan will check all label emails");
+          const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY) || "[]"));
+          const kept = [...saved];
+          localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify(kept));
+          showToast(`Reset scan history \u2014 ${saved.size} confirmed receipt${saved.size === 1 ? "" : "s"} preserved`);
         }
       }
     ), view === "insights" && /* @__PURE__ */ React.createElement(
@@ -1961,6 +1964,9 @@ root.render(React.createElement(App));
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : /* @__PURE__ */ new Set();
           processed.add(item.msgId);
           localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+          const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY) || "[]"));
+          saved.add(item.msgId);
+          localStorage.setItem(GMAIL_SAVED_KEY, JSON.stringify([...saved]));
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY) || "[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter((p) => p.msgId !== item.msgId)));
           setGmailModal((prev) => __spreadProps(__spreadValues({}, prev), { processed }));
@@ -1989,6 +1995,11 @@ root.render(React.createElement(App));
             if (msgId) processed.add(msgId);
           });
           if (Object.keys(newSenderEntries).length) setSenderMap((prev) => __spreadValues(__spreadValues({}, prev), newSenderEntries));
+          const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY) || "[]"));
+          confirmed.forEach(({ msgId, txnId }) => {
+            if (txnId) saved.add(msgId);
+          });
+          localStorage.setItem(GMAIL_SAVED_KEY, JSON.stringify([...saved]));
           gmailModal.orders.forEach((o) => {
             if (!confirmed.find((c) => c.msgId === o.msgId)) processed.add(o.msgId);
           });

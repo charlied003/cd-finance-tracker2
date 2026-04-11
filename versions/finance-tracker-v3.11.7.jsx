@@ -316,7 +316,6 @@ const GMAIL_VERIFIER_KEY  = "finance-tracker-gmail-verifier";
 const GMAIL_PROCESSED_KEY = "finance-tracker-gmail-processed";
 const GMAIL_PENDING_KEY   = "finance-tracker-gmail-pending";
 const GMAIL_SENDER_MAP_KEY = "finance-tracker-gmail-senders";
-const GMAIL_SAVED_KEY      = "finance-tracker-gmail-saved"; // msgIds successfully assigned to receipts
 
 // PKCE helpers
 function pkceVerifier() {
@@ -1387,13 +1386,7 @@ root.render(React.createElement(App));
               transactions={visibleTxns} receipts={receipts}
               onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})}
               gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} gmailProgress={gmailProgress} onScanGmail={scanGmailEmails}
-              onResetGmailHistory={()=>{
-                const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY)||"[]"));
-                // Keep only confirmed receipts in the processed list — clear everything else
-                const kept = [...saved];
-                localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify(kept));
-                showToast(`Reset scan history — ${saved.size} confirmed receipt${saved.size===1?"":"s"} preserved`);
-              }} />}
+              onResetGmailHistory={()=>{ localStorage.removeItem(GMAIL_PROCESSED_KEY); showToast("Gmail scan history cleared — next scan will check all label emails"); }} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -1555,10 +1548,6 @@ root.render(React.createElement(App));
           const processed = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
           processed.add(item.msgId);
           localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
-          // Track as saved so reset doesn't bring it back
-          const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY)||"[]"));
-          saved.add(item.msgId);
-          localStorage.setItem(GMAIL_SAVED_KEY, JSON.stringify([...saved]));
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p=>p.msgId!==item.msgId)));
           setGmailModal(prev => ({...prev, processed}));
@@ -1586,10 +1575,6 @@ root.render(React.createElement(App));
             if (msgId) processed.add(msgId);
           });
           if (Object.keys(newSenderEntries).length) setSenderMap(prev => ({...prev, ...newSenderEntries}));
-          // Track confirmed msgIds as saved so reset never brings them back
-          const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY)||"[]"));
-          confirmed.forEach(({msgId, txnId}) => { if (txnId) saved.add(msgId); });
-          localStorage.setItem(GMAIL_SAVED_KEY, JSON.stringify([...saved]));
           gmailModal.orders.forEach(o => { if (!confirmed.find(c=>c.msgId===o.msgId)) processed.add(o.msgId); });
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p => !gmailModal.orders.find(o=>o.msgId===p.msgId))));
