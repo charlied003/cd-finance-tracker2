@@ -339,9 +339,9 @@ function monzoClearTokens() { [MONZO_ACCESS_KEY, MONZO_REFRESH_KEY, MONZO_EXPIRY
 // Exchange auth code for tokens (PKCE; includes client_secret if confidential client)
 async function monzoExchangeCode(code) {
   const cfg = monzoCfg(); if (!cfg) throw new Error("Monzo config missing");
-  const verifier = sessionStorage.getItem(MONZO_VERIFIER_KEY);
+  const verifier = localStorage.getItem(MONZO_VERIFIER_KEY);
   if (!verifier) throw new Error("PKCE verifier missing — please try connecting again");
-  sessionStorage.removeItem(MONZO_VERIFIER_KEY);
+  localStorage.removeItem(MONZO_VERIFIER_KEY);
   const params = { grant_type: "authorization_code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, code, code_verifier: verifier };
   if (cfg.clientSecret) params.client_secret = cfg.clientSecret;
   const res = await fetch("https://api.monzo.com/oauth2/token", {
@@ -383,8 +383,8 @@ async function monzoStartAuth() {
   const verifier  = pkceVerifier();
   const challenge = await pkceChallenge(verifier);
   const state     = pkceVerifier();
-  sessionStorage.setItem(MONZO_VERIFIER_KEY, verifier);
-  sessionStorage.setItem(MONZO_STATE_KEY, state);
+  localStorage.setItem(MONZO_VERIFIER_KEY, verifier);
+  localStorage.setItem(MONZO_STATE_KEY, state);
   window.location.href = `https://auth.monzo.com/?${new URLSearchParams({ client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: "code", state, code_challenge: challenge, code_challenge_method: "S256" })}`;
 }
 
@@ -613,9 +613,10 @@ const DEFAULT_RULES = {
       const urlParams = new URLSearchParams(window.location.search);
       const oauthCode  = urlParams.get("code");
       const oauthState = urlParams.get("state");
-      if (oauthCode && oauthState && oauthState === sessionStorage.getItem(MONZO_STATE_KEY)) {
+      const savedState = localStorage.getItem(MONZO_STATE_KEY);
+      if (oauthCode && oauthState && oauthState === savedState) {
         window.history.replaceState({}, "", window.location.pathname);
-        sessionStorage.removeItem(MONZO_STATE_KEY);
+        localStorage.removeItem(MONZO_STATE_KEY);
         setMonzoStatus("connecting");
         try {
           const tokens = await monzoExchangeCode(oauthCode);
@@ -628,6 +629,10 @@ const DEFAULT_RULES = {
           setToast({ msg: `Monzo connection failed: ${e.message}`, type: "error" });
           setTimeout(() => setToast(null), 3500);
         }
+      } else if (oauthCode && oauthState && oauthState !== savedState) {
+        window.history.replaceState({}, "", window.location.pathname);
+        setToast({ msg: `Monzo: state mismatch — try connecting again`, type: "error" });
+        setTimeout(() => setToast(null), 5000);
       } else if (localStorage.getItem(MONZO_ACCESS_KEY)) {
         setMonzoStatus("connected");
       }
