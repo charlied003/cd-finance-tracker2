@@ -552,6 +552,7 @@ export default function App() {
   const [merchantRules, setMerchantRules]   = useState({});
   const [apiKey, setApiKey]                 = useState("");
   const [receipts, setReceipts]             = useState({});
+  const [pinnedSubs, setPinnedSubs]         = useState([]); // [{name, amount, frequency, note}]
   const [receiptModal, setReceiptModal]     = useState(null);
   const [gistToken, setGistToken]           = useState("");
   const [gistId, setGistId]                 = useState("");
@@ -612,6 +613,7 @@ const DEFAULT_RULES = {
         if (s.merchantRules)  setMerchantRules({...DEFAULT_RULES, ...s.merchantRules});
         if (s.apiKey)         setApiKey(s.apiKey);
         if (s.receipts)       setReceipts(s.receipts);
+        if (s.pinnedSubs)     setPinnedSubs(s.pinnedSubs);
       }
       // Handle Monzo OAuth redirect (code + state in URL after user approves)
       const urlParams = new URLSearchParams(window.location.search);
@@ -656,6 +658,7 @@ const DEFAULT_RULES = {
           if (remote.receipts)      setReceipts(r => ({ ...r, ...remote.receipts }));
           if (remote.accounts)      setAccounts(remote.accounts);
           if (remote.cycleStart)    setCycleStart(remote.cycleStart);
+          if (remote.pinnedSubs)    setPinnedSubs(remote.pinnedSubs);
           setSyncStatus("synced");
         } catch(e) {
           console.warn("Gist load failed:", e);
@@ -668,7 +671,7 @@ const DEFAULT_RULES = {
   }, []);
 
   useEffect(() => {
-    const data = JSON.stringify({accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts});
+    const data = JSON.stringify({accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts, pinnedSubs});
     try { localStorage.setItem(STORAGE_KEY, data); } catch {}
     if (window.storage) window.storage.set(STORAGE_KEY, data).catch(()=>{});
   }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey]);
@@ -680,7 +683,7 @@ const DEFAULT_RULES = {
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(async () => {
       try {
-        const data = { version: "2.1", merchantRules, receipts, accounts, cycleStart };
+        const data = { version: "2.1", merchantRules, receipts, accounts, cycleStart, pinnedSubs };
         const newId = await gistSave(gistToken, gistId, data);
         if (newId !== gistId) {
           setGistId(newId);
@@ -692,7 +695,7 @@ const DEFAULT_RULES = {
         setSyncStatus("error");
       }
     }, 2000);
-  }, [merchantRules, receipts, accounts, cycleStart, gistToken, gistId]);
+  }, [merchantRules, receipts, accounts, cycleStart, pinnedSubs, gistToken, gistId]);
 
   // ── Derived ──
   const periods       = getAllPeriods(transactions, cycleStart);
@@ -1085,7 +1088,8 @@ root.render(React.createElement(App));
               displayPeriod={displayPeriod} comparePeriod={comparePeriod} periods={periods}
               setComparePeriod={setComparePeriod} visibleTxns={visibleTxns} periodLabel={periodLabel}
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})}
-              allTransactions={applyRules(transactions.filter(t => activeAccounts.includes(t.accountId)))} />}
+              allTransactions={applyRules(transactions.filter(t => activeAccounts.includes(t.accountId)))}
+              pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} />}
             {view==="transactions" && <TxList
               txns={visibleTxns} accounts={accounts}
               onCatChange={(id,cat)=>setTransactions(prev=>prev.map(t=>t.id===id?{...t,category:cat}:t))}
@@ -1399,7 +1403,7 @@ function InfraCard({devServices, setDevServices, aiScanCount}) {
 
 // Merchants that should never appear in subscription detection
 // (retailers where regular spending looks like a subscription pattern)
-const SUB_BLACKLIST = new Set(["next"]);
+const SUB_BLACKLIST = new Set(["next", "charlie devine", "omniplex"]);
 
 // ─── Subscription Detection ───────────────────────────────────────────────────
 
@@ -1488,12 +1492,21 @@ function detectSubscriptions(allTxns) {
 }
 
 // ─── Spend View ───────────────────────────────────────────────────────────────
-function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,periodLabel,receipts,onAddReceipt,allTransactions}) {
+function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
+  const [addSubOpen, setAddSubOpen]             = useState(false);
+  const [newSub, setNewSub]                     = useState({name:"",amount:"",frequency:"Monthly",note:""});
   const allCats = [...new Set([...Object.keys(spending),...Object.keys(compareSpend)])].sort((a,b)=>(spending[b]||0)-(spending[a]||0));
-  const subs = detectSubscriptions(allTransactions || []).filter(s => !s.possiblyEnded);
+  const autoSubs = detectSubscriptions(allTransactions || []).filter(s => !s.possiblyEnded);
+  const pinnedSubsArr = pinnedSubs || [];
+  // Merge: pinned first, then auto-detected (skip auto if same name already pinned)
+  const pinnedNames = new Set(pinnedSubsArr.map(p => p.name.toLowerCase()));
+  const subs = [
+    ...pinnedSubsArr.map(p => ({ ...p, pinned: true, lastPaid: null, daysSince: null, daysUntil: null, count: null })),
+    ...autoSubs.filter(s => !pinnedNames.has(s.name.toLowerCase())),
+  ];
   const ccTotal = visibleTxns.filter(t=>["Fuel","Parking"].includes(t.category)&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
 
   function getMerchantBreakdown(cat) {
@@ -1540,43 +1553,72 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
         </div>
       )}
 
-      {subs.length>0&&(
-        <div style={{marginBottom:16}}>
-          <div onClick={()=>setShowSubs(v=>!v)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,cursor:"pointer"}}>
+      <div style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div onClick={()=>setShowSubs(v=>!v)} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
             <div style={{fontSize:10,color:"#a78bfa",letterSpacing:3,textTransform:"uppercase",fontWeight:700}}>Subscriptions ({subs.length})</div>
             <span style={{fontSize:10,color:"#4b5563"}}>{showSubs?"▲":"▼"}</span>
           </div>
-          {showSubs&&(
-            <div style={{background:"#0f1117",border:"1px solid #a78bfa30",borderRadius:10,overflow:"hidden"}}>
-              {subs.map((s,i)=>{
-                const overdue  = !s.possiblyEnded && s.daysUntil < 0;
-                const soon     = !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
-                const dotColor = s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
-                const dueLabel = s.possiblyEnded
-                  ? `Possibly cancelled — last paid ${s.daysSince}d ago`
-                  : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil)===1?"":"s"}`
-                  : s.daysUntil === 0 ? "Due today"
-                  : `Due in ${s.daysUntil} day${s.daysUntil===1?"":"s"}`;
-                const lastLabel = s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
-                return (
-                  <div key={s.name} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <div style={{width:7,height:7,borderRadius:"50%",background:dotColor,flexShrink:0}}/>
-                      <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{s.name}</span>
-                      <span style={{fontSize:11,color:"#4b5563",marginRight:8}}>{s.frequency}</span>
-                      <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(s.amount)}</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",marginTop:4,paddingLeft:15}}>
-                      <span style={{fontSize:10,color:"#4b5563"}}>{lastLabel} · {s.lastPaid}</span>
-                      <span style={{fontSize:10,fontWeight:700,color:dotColor}}>{dueLabel}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <button onClick={()=>{setAddSubOpen(v=>!v);setNewSub({name:"",amount:"",frequency:"Monthly",note:""}); }} style={{background:"#1c1f2e",border:"1px solid #a78bfa50",borderRadius:6,color:"#a78bfa",fontSize:11,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
         </div>
-      )}
+        {addSubOpen&&(
+          <div style={{background:"#0f1117",border:"1px solid #a78bfa40",borderRadius:10,padding:"12px 14px",marginBottom:8}}>
+            <div style={{fontSize:10,color:"#a78bfa",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>New Subscription</div>
+            <input placeholder="Name (e.g. Netflix)" value={newSub.name} onChange={e=>setNewSub(p=>({...p,name:e.target.value}))}
+              style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,marginBottom:8,fontFamily:"inherit"}} />
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <input placeholder="Amount (£)" value={newSub.amount} onChange={e=>setNewSub(p=>({...p,amount:e.target.value}))} type="number" min="0" step="0.01"
+                style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,fontFamily:"inherit"}} />
+              <select value={newSub.frequency} onChange={e=>setNewSub(p=>({...p,frequency:e.target.value}))}
+                style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,fontFamily:"inherit"}}>
+                {["Weekly","Monthly","Quarterly","Yearly"].map(f=><option key={f}>{f}</option>)}
+              </select>
+            </div>
+            <input placeholder="Note (optional)" value={newSub.note} onChange={e=>setNewSub(p=>({...p,note:e.target.value}))}
+              style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,marginBottom:10,fontFamily:"inherit"}} />
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{
+                const name=newSub.name.trim(); const amt=parseFloat(newSub.amount);
+                if(!name||isNaN(amt)||amt<=0) return;
+                setPinnedSubs(prev=>[...prev,{name,amount:amt,frequency:newSub.frequency,note:newSub.note.trim()}]);
+                setAddSubOpen(false);
+              }} style={{flex:1,background:"#a78bfa",border:"none",borderRadius:6,color:"#0a0b0f",fontWeight:700,fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>Save</button>
+              <button onClick={()=>setAddSubOpen(false)} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#94a3b8",fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {showSubs&&subs.length>0&&(
+          <div style={{background:"#0f1117",border:"1px solid #a78bfa30",borderRadius:10,overflow:"hidden"}}>
+            {subs.map((s,i)=>{
+              const overdue  = !s.pinned && !s.possiblyEnded && s.daysUntil < 0;
+              const soon     = !s.pinned && !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
+              const dotColor = s.pinned ? "#a78bfa" : s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
+              const dueLabel = s.pinned ? (s.note || "Manually pinned")
+                : s.possiblyEnded ? `Possibly cancelled — last paid ${s.daysSince}d ago`
+                : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil)===1?"":"s"}`
+                : s.daysUntil === 0 ? "Due today"
+                : `Due in ${s.daysUntil} day${s.daysUntil===1?"":"s"}`;
+              const lastLabel = s.pinned ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
+              return (
+                <div key={s.name+i} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:s.pinned?"transparent":dotColor,border:s.pinned?"2px solid #a78bfa":"none"}}/>
+                    <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{s.name}</span>
+                    <span style={{fontSize:11,color:"#4b5563",marginRight:8}}>{s.frequency}</span>
+                    <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(s.amount)}</span>
+                    {s.pinned&&<button onClick={()=>setPinnedSubs(prev=>prev.filter(p=>p.name!==s.name))} style={{background:"none",border:"none",color:"#4b5563",fontSize:14,cursor:"pointer",padding:"0 0 0 4px",lineHeight:1}}>✕</button>}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:4,paddingLeft:15}}>
+                    <span style={{fontSize:10,color:"#4b5563"}}>{lastLabel}{!s.pinned&&s.lastPaid?` · ${s.lastPaid}`:""}</span>
+                    <span style={{fontSize:10,fontWeight:700,color:dotColor}}>{dueLabel}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {showSubs&&subs.length===0&&<div style={{fontSize:12,color:"#4b5563"}}>No subscriptions detected — use + Add to pin one manually.</div>}
+      </div>
 
       <SectionLabel>{periodLabel(displayPeriod)}{comparePeriod?` vs ${periodLabel(comparePeriod)}`:" breakdown"}</SectionLabel>
       <div style={{background:"#0f1117",border:"1px solid #f8717140",borderRadius:10,padding:"14px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
