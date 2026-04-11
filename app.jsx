@@ -586,15 +586,23 @@ function gmailDecodeBody(payload) {
   if (!payload) return "";
   if (payload.body?.data) { try { return atob(payload.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch { return ""; } }
   if (payload.parts) {
+    // Collect both plain and html — return whichever is richer
     const plain = payload.parts.find(p => p.mimeType==="text/plain");
-    if (plain) { const t=gmailDecodeBody(plain); if(t) return t; }
+    const html  = payload.parts.find(p => p.mimeType==="text/html");
+    const plainText = plain ? gmailDecodeBody(plain) : "";
+    const htmlText  = html  ? gmailDecodeBody(html)  : "";
+    // Prefer plain if it's substantial; otherwise fall back to HTML (Amazon, etc. have sparse plain text)
+    if (plainText.length >= 500) return plainText;
+    if (htmlText.length  > plainText.length) return htmlText;
+    if (plainText) return plainText;
+    // Recurse into other parts (e.g. multipart/alternative nested inside multipart/mixed)
     for (const p of payload.parts) { const t=gmailDecodeBody(p); if(t) return t; }
   }
   return "";
 }
 
 async function extractOrderFromEmail(subject, from, body, apiKey) {
-  const clean = body.replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/\s+/g," ").slice(0,5000);
+  const clean = body.replace(/<[^>]+>/g," ").replace(/&[a-z]+;/gi," ").replace(/\s+/g," ").trim().slice(0,12000);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
     headers:{"x-api-key":apiKey,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
