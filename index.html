@@ -1291,7 +1291,8 @@ root.render(React.createElement(App));
         onSyncStarling: syncStarling,
         onSyncMonzo: syncMonzo,
         onExportCredentials: () => {
-          const creds = { starlingToken, starlingProxy, gistToken, gistId, anthropicKey: apiKey };
+          const cfg = window.MONZO_CONFIG || {};
+          const creds = { starlingToken, starlingProxy, gistToken, gistId, anthropicKey: apiKey, monzoClientId: cfg.clientId || "", monzoClientSecret: cfg.clientSecret || "" };
           const a = document.createElement("a");
           a.href = "data:application/json," + encodeURIComponent(JSON.stringify(creds, null, 2));
           a.download = "finance-tracker-credentials.json";
@@ -1322,6 +1323,11 @@ root.render(React.createElement(App));
               }
               if (c.anthropicKey) {
                 setApiKey(c.anthropicKey);
+              }
+              if (c.monzoClientId || c.monzoClientSecret) {
+                window.MONZO_CONFIG = window.MONZO_CONFIG || {};
+                if (c.monzoClientId) window.MONZO_CONFIG.clientId = c.monzoClientId;
+                if (c.monzoClientSecret) window.MONZO_CONFIG.clientSecret = c.monzoClientSecret;
               }
               showToast("Credentials imported");
             } catch (e2) {

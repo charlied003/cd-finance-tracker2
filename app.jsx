@@ -1084,7 +1084,8 @@ root.render(React.createElement(App));
           starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
           bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
           onExportCredentials={()=>{
-            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey};
+            const cfg=window.MONZO_CONFIG||{};
+            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey,monzoClientId:cfg.clientId||"",monzoClientSecret:cfg.clientSecret||""};
             const a=document.createElement("a");a.href="data:application/json,"+encodeURIComponent(JSON.stringify(creds,null,2));a.download="finance-tracker-credentials.json";a.click();
           }}
           onImportCredentials={e=>{
@@ -1097,6 +1098,11 @@ root.render(React.createElement(App));
                 if(c.gistToken){setGistToken(c.gistToken);localStorage.setItem(GIST_TOKEN_KEY,c.gistToken);}
                 if(c.gistId){setGistId(c.gistId);localStorage.setItem(GIST_ID_KEY,c.gistId);}
                 if(c.anthropicKey){setApiKey(c.anthropicKey);}
+                if(c.monzoClientId||c.monzoClientSecret){
+                  window.MONZO_CONFIG=window.MONZO_CONFIG||{};
+                  if(c.monzoClientId) window.MONZO_CONFIG.clientId=c.monzoClientId;
+                  if(c.monzoClientSecret) window.MONZO_CONFIG.clientSecret=c.monzoClientSecret;
+                }
                 showToast("Credentials imported");
               } catch { showToast("Invalid credentials file","error"); }
             });
