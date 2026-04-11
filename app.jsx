@@ -296,6 +296,7 @@ function matchReceiptToTransaction(extracted, transactions) {
 }
 
 // ─── Bank API / Monzo OAuth (PKCE) ───────────────────────────────────────────
+const MONZO_CONFIG_KEY    = "finance-tracker-monzo-config";
 const STARLING_TOKEN_KEY  = "finance-tracker-starling-token";
 const STARLING_PROXY_KEY  = "finance-tracker-starling-proxy";
 const DEV_SERVICES_KEY    = "finance-tracker-dev-services";
@@ -318,6 +319,14 @@ async function pkceChallenge(verifier) {
 }
 
 // Token storage
+function monzoLoadCfg() {
+  if (window.MONZO_CONFIG) return; // already set by config.js
+  try {
+    const saved = localStorage.getItem(MONZO_CONFIG_KEY);
+    if (saved) window.MONZO_CONFIG = JSON.parse(saved);
+  } catch {}
+}
+monzoLoadCfg();
 function monzoCfg()   { return window.MONZO_CONFIG || null; }
 function monzoTokens(){ return { access: localStorage.getItem(MONZO_ACCESS_KEY), refresh: localStorage.getItem(MONZO_REFRESH_KEY), expiry: parseInt(localStorage.getItem(MONZO_EXPIRY_KEY)||"0") }; }
 function monzoSaveTokens({ access_token, refresh_token, expires_in }) {
@@ -546,7 +555,7 @@ export default function App() {
   const syncTimer                           = useRef(null);
   const syncReady                           = useRef(false);
   const [monzoStatus, setMonzoStatus]       = useState("disconnected"); // disconnected|connecting|connected|expired
-  const [monzoCfgReady, setMonzoCfgReady]   = useState(Boolean(window.MONZO_CONFIG));
+  const [monzoCfgReady, setMonzoCfgReady]   = useState(Boolean(monzoCfg()));
   const [starlingToken, setStarlingToken]   = useState("");
   const [starlingProxy, setStarlingProxy]   = useState("");
   const [bankSyncing, setBankSyncing]       = useState(false);
@@ -1100,11 +1109,11 @@ root.render(React.createElement(App));
                 if(c.gistToken){setGistToken(c.gistToken);localStorage.setItem(GIST_TOKEN_KEY,c.gistToken);}
                 if(c.gistId){setGistId(c.gistId);localStorage.setItem(GIST_ID_KEY,c.gistId);}
                 if(c.anthropicKey){setApiKey(c.anthropicKey);}
-                if(c.monzoClientId||c.monzoClientSecret){
-                  window.MONZO_CONFIG=window.MONZO_CONFIG||{};
-                  if(c.monzoClientId) window.MONZO_CONFIG.clientId=c.monzoClientId;
-                  if(c.monzoClientSecret) window.MONZO_CONFIG.clientSecret=c.monzoClientSecret;
-                  window.MONZO_CONFIG.redirectUri=c.monzoRedirectUri||window.location.href.split("?")[0];
+                if(c.monzoClientId){
+                  const cfg={clientId:c.monzoClientId,redirectUri:c.monzoRedirectUri||window.location.href.split("?")[0]};
+                  if(c.monzoClientSecret) cfg.clientSecret=c.monzoClientSecret;
+                  window.MONZO_CONFIG=cfg;
+                  localStorage.setItem(MONZO_CONFIG_KEY,JSON.stringify(cfg));
                   setMonzoCfgReady(true);
                 }
                 showToast("Credentials imported");

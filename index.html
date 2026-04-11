@@ -393,6 +393,7 @@ amount = price per single item.` }
       return __spreadProps(__spreadValues({}, t), { score });
     }).filter((t) => t.score > 20).sort((a, b) => b.score - a.score).slice(0, 5);
   }
+  const MONZO_CONFIG_KEY = "finance-tracker-monzo-config";
   const STARLING_TOKEN_KEY = "finance-tracker-starling-token";
   const STARLING_PROXY_KEY = "finance-tracker-starling-proxy";
   const DEV_SERVICES_KEY = "finance-tracker-dev-services";
@@ -413,6 +414,15 @@ amount = price per single item.` }
       return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
     });
   }
+  function monzoLoadCfg() {
+    if (window.MONZO_CONFIG) return;
+    try {
+      const saved = localStorage.getItem(MONZO_CONFIG_KEY);
+      if (saved) window.MONZO_CONFIG = JSON.parse(saved);
+    } catch (e) {
+    }
+  }
+  monzoLoadCfg();
   function monzoCfg() {
     return window.MONZO_CONFIG || null;
   }
@@ -665,7 +675,7 @@ amount = price per single item.` }
     const syncTimer = useRef(null);
     const syncReady = useRef(false);
     const [monzoStatus, setMonzoStatus] = useState("disconnected");
-    const [monzoCfgReady, setMonzoCfgReady] = useState(Boolean(window.MONZO_CONFIG));
+    const [monzoCfgReady, setMonzoCfgReady] = useState(Boolean(monzoCfg()));
     const [starlingToken, setStarlingToken] = useState("");
     const [starlingProxy, setStarlingProxy] = useState("");
     const [bankSyncing, setBankSyncing] = useState(false);
@@ -1326,11 +1336,11 @@ root.render(React.createElement(App));
               if (c.anthropicKey) {
                 setApiKey(c.anthropicKey);
               }
-              if (c.monzoClientId || c.monzoClientSecret) {
-                window.MONZO_CONFIG = window.MONZO_CONFIG || {};
-                if (c.monzoClientId) window.MONZO_CONFIG.clientId = c.monzoClientId;
-                if (c.monzoClientSecret) window.MONZO_CONFIG.clientSecret = c.monzoClientSecret;
-                window.MONZO_CONFIG.redirectUri = c.monzoRedirectUri || window.location.href.split("?")[0];
+              if (c.monzoClientId) {
+                const cfg = { clientId: c.monzoClientId, redirectUri: c.monzoRedirectUri || window.location.href.split("?")[0] };
+                if (c.monzoClientSecret) cfg.clientSecret = c.monzoClientSecret;
+                window.MONZO_CONFIG = cfg;
+                localStorage.setItem(MONZO_CONFIG_KEY, JSON.stringify(cfg));
                 setMonzoCfgReady(true);
               }
               showToast("Credentials imported");
