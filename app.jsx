@@ -561,10 +561,19 @@ async function gmailFindLabel(token, labelName) {
   return (data.labels||[]).find(l => l.name.toLowerCase()===labelName.toLowerCase()) || null;
 }
 
-async function gmailListMessages(token, labelId, maxResults=50) {
-  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({labelIds:labelId,maxResults})}`, { headers:{Authorization:`Bearer ${token}`} });
-  if (!res.ok) throw new Error(`Messages fetch failed (${res.status})`);
-  return (await res.json()).messages || [];
+async function gmailListMessages(token, labelId, maxResults=1000) {
+  let messages = [];
+  let pageToken;
+  do {
+    const params = { labelIds: labelId, maxResults: Math.min(500, maxResults - messages.length) };
+    if (pageToken) params.pageToken = pageToken;
+    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams(params)}`, { headers:{Authorization:`Bearer ${token}`} });
+    if (!res.ok) throw new Error(`Messages fetch failed (${res.status})`);
+    const data = await res.json();
+    messages = [...messages, ...(data.messages || [])];
+    pageToken = data.nextPageToken;
+  } while (pageToken && messages.length < maxResults);
+  return messages;
 }
 
 async function gmailGetMessage(token, msgId) {
@@ -1207,12 +1216,15 @@ root.render(React.createElement(App));
       const processed = new Set(JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY)||"[]"));
       let messages;
       try {
-        messages = await gmailListMessages(token, label.id, 50);
+        messages = await gmailListMessages(token, label.id);
       } catch(e) {
         showToast(`Gmail messages fetch failed: ${e.message}`, "error"); setGmailSyncing(false); return;
       }
       const newMsgs = messages.filter(m => !processed.has(m.id));
-      if (!newMsgs.length) { showToast("No new emails in receipts label"); setGmailSyncing(false); return; }
+      if (!newMsgs.length) {
+        showToast(`No new emails — ${messages.length} in label, ${processed.size} already scanned`, "error");
+        setGmailSyncing(false); return;
+      }
 
       const toScan = newMsgs.slice(0, 20);
       setGmailProgress({ current: 0, total: toScan.length });
@@ -1365,7 +1377,8 @@ root.render(React.createElement(App));
             {view==="receipts" && <ReceiptsView
               transactions={visibleTxns} receipts={receipts}
               onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})}
-              gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} gmailProgress={gmailProgress} onScanGmail={scanGmailEmails} />}
+              gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} gmailProgress={gmailProgress} onScanGmail={scanGmailEmails}
+              onResetGmailHistory={()=>{ localStorage.removeItem(GMAIL_PROCESSED_KEY); showToast("Gmail scan history cleared — next scan will check all label emails"); }} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -2990,23 +3003,32 @@ function InsightsView({transactions, periods, activeAccounts, cycleStart, period
 
 
 // ─── Receipts View ────────────────────────────────────────────────────────────
-function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, gmailProgress, onScanGmail}) {
+function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, gmailProgress, onScanGmail, onResetGmailHistory}) {
   const withReceipts = transactions.filter(t => receipts[t.id]?.items?.length > 0)
     .sort((a,b) => b.date > a.date ? 1 : -1);
+  const processedCount = JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY)||"[]").length;
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <SectionLabel>{withReceipts.length} receipts</SectionLabel>
         <div style={{display:"flex",gap:6}}>
           {gmailStatus==="connected" && (
-            <button onClick={onScanGmail} disabled={gmailSyncing}
-              style={{background:gmailSyncing?"#1c1f2e":"#60a5fa15",border:`1px solid ${gmailSyncing?"#2a2d3a":"#60a5fa40"}`,color:gmailSyncing?"#4b5563":"#60a5fa",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:gmailSyncing?"default":"pointer",letterSpacing:1,minWidth:90}}>
-              {gmailSyncing
-                ? gmailProgress.total > 0
-                  ? `⟳ ${gmailProgress.current}/${gmailProgress.total}`
-                  : "⟳ LOADING…"
-                : "📧 GMAIL"}
-            </button>
+            <>
+              <button onClick={onScanGmail} disabled={gmailSyncing}
+                style={{background:gmailSyncing?"#1c1f2e":"#60a5fa15",border:`1px solid ${gmailSyncing?"#2a2d3a":"#60a5fa40"}`,color:gmailSyncing?"#4b5563":"#60a5fa",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:gmailSyncing?"default":"pointer",letterSpacing:1,minWidth:90}}>
+                {gmailSyncing
+                  ? gmailProgress.total > 0
+                    ? `⟳ ${gmailProgress.current}/${gmailProgress.total}`
+                    : "⟳ LOADING…"
+                  : "📧 GMAIL"}
+              </button>
+              {processedCount > 0 && (
+                <button onClick={onResetGmailHistory} title={`Clear ${processedCount} scanned message IDs — forces rescan of all label emails`}
+                  style={{background:"none",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:8,padding:"6px 10px",fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:1}}>
+                  ↺ {processedCount}
+                </button>
+              )}
+            </>
           )}
           <button onClick={onAdd} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ ADD RECEIPT</button>
         </div>
