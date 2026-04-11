@@ -841,6 +841,12 @@ root.render(React.createElement(App));
       const since = lastDate
         ? new Date(new Date(lastDate).getTime() - 24*60*60*1000).toISOString() // 1 day overlap
         : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();       // 90 days first run
+      const balRes = await fetch(`https://api.monzo.com/balance?account_id=${accId}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (balRes.ok) {
+        const balData = await balRes.json();
+        const liveBal = (balData.balance ?? balData.total_balance) / 100;
+        setManualBalances(prev => ({ ...prev, grocery: liveBal }));
+      }
       const raw = await monzoFetchTransactions(token, accId, since);
       const existingIds = new Set(transactions.map(t => t.id));
       const fresh = raw.map((tx, i) => monzoToInternal(tx, i)).filter(t => t && !existingIds.has(t.id));
@@ -940,6 +946,13 @@ root.render(React.createElement(App));
           const since = lastDate
             ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
             : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+          // Fetch live balance
+          const balRes = await fetch(`https://api.monzo.com/balance?account_id=${accId}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (balRes.ok) {
+            const balData = await balRes.json();
+            const liveBal = (balData.balance ?? balData.total_balance) / 100;
+            setManualBalances(prev => ({ ...prev, grocery: liveBal }));
+          }
           const raw = await monzoFetchTransactions(token, accId, since);
           const existingIds = new Set(transactions.map(t => t.id));
           const fresh = raw.map((tx, i) => monzoToInternal(tx, i)).filter(t => t && !existingIds.has(t.id));
