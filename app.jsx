@@ -738,7 +738,7 @@ const DEFAULT_RULES = {
   const spending     = getSpend(visibleTxns);
   const compareSpend = getSpend(compareTxns);
   const totalSpend   = Object.values(spending).reduce((s,v)=>s+v,0);
-  const totalIncome  = visibleTxns.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
+  const totalIncome  = visibleTxns.filter(t=>t.amount>0&&!EXCLUDE_FROM_SPEND.includes(t.category||"Other")).reduce((s,t)=>s+t.amount,0);
 
   const showToast = (msg, type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
 
@@ -1201,7 +1201,7 @@ function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
         {[["Spent",fmt(totalSpend),"#f87171"],["In",fmt(totalIncome),"#4ade80"],
           ["Net",fmtSigned(net),net>=0?"#4ade80":"#f87171"],
-          ["To Savings",fmt(toSavings),"#fbbf24"],
+          ["To Savings",toSavings<0?fmtSigned(toSavings):fmt(toSavings),toSavings<0?"#4ade80":"#fbbf24"],
           ["To Grocery",fmt(toGrocery),"#4ade80"],
           ["Credit Card",fmt(toCreditCard),"#f87171"],
         ].map(([label,val,col])=>(
