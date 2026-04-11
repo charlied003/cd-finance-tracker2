@@ -24,6 +24,14 @@ const CAT_COLORS = {
 
 const APP_VERSION = "__APP_VERSION__";
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// ─── Demo / Pseudonymise mode ─────────────────────────────────────────────────
+const PseudoCtx = React.createContext(false);
+const PSEUDO_FACTOR = 0.73;
+const PSEUDO_NAMES = ["Meridian","Harborside","Lakewood","Pinecrest","Westfield","Northgate","Clearwater","Elmwood","Riverside","Oakdale","Mapleton","Birchwood","Cedargate","Hillcrest","Brookside","Millgate","Sycamore","Fairview","Greenhill","Stonegate","Copperfield","Whitmore","Ashford","Redwood","Fernwood","Glenbrook","Silvergate","Thornfield","Wyndham","Bramblewood"];
+function _pseudoHash(s) { let h=0; for(let i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))&0xffff; return h; }
+function pAmt(x, on) { if (!on) return x; return Math.round(Math.abs(x)*PSEUDO_FACTOR*(x<0?-1:1)*100)/100; }
+function pName(s, on) { if (!on || !s) return s; return PSEUDO_NAMES[_pseudoHash(s)%PSEUDO_NAMES.length]; }
 const STORAGE_KEY = "finance-tracker-v5";
 const DEFAULT_CYCLE_START = 25;
 const EXCLUDE_FROM_SPEND  = ["Savings","SavingsReturn","Transfer"];
@@ -706,6 +714,7 @@ export default function App() {
   const [gistToken, setGistToken]           = useState("");
   const [gistId, setGistId]                 = useState("");
   const [syncStatus, setSyncStatus]         = useState("idle"); // "idle"|"syncing"|"synced"|"error"
+  const [pseudo, setPseudo]                 = useState(false); // demo/pseudonymise mode
   const syncTimer                           = useRef(null);
   const syncReady                           = useRef(false);
   const [monzoStatus, setMonzoStatus]       = useState("disconnected"); // disconnected|connecting|connected|expired
@@ -1317,6 +1326,7 @@ root.render(React.createElement(App));
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
+    <PseudoCtx.Provider value={pseudo}>
     <div style={{minHeight:"100vh",background:"#0a0b0f",color:"#e2e4ec",fontFamily:"'DM Mono','Fira Mono',monospace",paddingBottom:80}}>
 
       {/* Header */}
@@ -1330,6 +1340,7 @@ root.render(React.createElement(App));
             <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginTop:1}}>Overview</div>
           </div>
           <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setPseudo(p=>!p)} title={pseudo?"Exit demo mode":"Demo mode — hides real amounts & names"} style={{background:pseudo?"#a78bfa20":"#1c1f2e",border:`1px solid ${pseudo?"#a78bfa60":"#2a2d3a"}`,color:pseudo?"#a78bfa":"#4b5563",borderRadius:8,padding:"8px 10px",fontSize:13,cursor:"pointer"}}>{pseudo?"🔓":"🔒"}</button>
             <button onClick={()=>setModal({type:"rules"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>RULES</button>
             <button onClick={exportHTML} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>↓ HTML</button>
             <button onClick={()=>setReceiptModal({step:"upload",pinnedTxId:null,queue:[],currentIdx:0})} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>🧾</button>
@@ -1626,12 +1637,15 @@ root.render(React.createElement(App));
         onClose={()=>setGmailModal(null)} />}
 
       {toast && <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#f87171":"#4ade80",color:"#0a0b0f",borderRadius:8,padding:"10px 20px",fontWeight:700,fontSize:13,zIndex:200,letterSpacing:0.5,boxShadow:"0 8px 32px rgba(0,0,0,.5)",whiteSpace:"nowrap"}}>{toast.msg}</div>}
+      {pseudo&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#a78bfa",color:"#0a0b0f",textAlign:"center",fontSize:10,fontWeight:700,letterSpacing:3,padding:"3px 0",zIndex:300}}>DEMO MODE — AMOUNTS & NAMES ANONYMISED</div>}
     </div>
+    </PseudoCtx.Provider>
   );
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,setComparePeriod,visibleTxns,spending,totalSpend,totalIncome,getAccountBalance,getSavingsAllocated,periodLabel,devServices,setDevServices,aiScanCount}) {
+  const pseudo     = useContext(PseudoCtx);
   const topCats    = Object.entries(spending).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const net        = totalIncome - totalSpend;
   const transferType = t => t.transferType || t.nativeTransferType;
@@ -1642,11 +1656,11 @@ function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,
   return (
     <div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-        {[["Spent",fmt(totalSpend),"#f87171"],["In",fmt(totalIncome),"#4ade80"],
-          ["Net",fmtSigned(net),net>=0?"#4ade80":"#f87171"],
-          ["To Savings",toSavings<0?fmtSigned(toSavings):fmt(toSavings),toSavings<0?"#f87171":"#fbbf24"],
-          ["To Grocery",fmt(toGrocery),"#4ade80"],
-          ["Credit Card",fmt(toCreditCard),"#f87171"],
+        {[["Spent",fmt(pAmt(totalSpend,pseudo)),"#f87171"],["In",fmt(pAmt(totalIncome,pseudo)),"#4ade80"],
+          ["Net",fmtSigned(pAmt(net,pseudo)),net>=0?"#4ade80":"#f87171"],
+          ["To Savings",pAmt(toSavings,pseudo)<0?fmtSigned(pAmt(toSavings,pseudo)):fmt(pAmt(toSavings,pseudo)),toSavings<0?"#f87171":"#fbbf24"],
+          ["To Grocery",fmt(pAmt(toGrocery,pseudo)),"#4ade80"],
+          ["Credit Card",fmt(pAmt(toCreditCard,pseudo)),"#f87171"],
         ].map(([label,val,col])=>(
           <div key={label} style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"14px 16px"}}>
             <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase"}}>{label}</div>
@@ -1663,7 +1677,7 @@ function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,
             <div key={a.id} style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:a.color,flexShrink:0}}/>
               <div style={{flex:1,fontSize:13,fontWeight:700}}>{a.name}</div>
-              <div style={{fontSize:16,fontWeight:700,color:bal==null?"#4b5563":bal>=0?a.color:"#f87171"}}>{bal==null?"—":fmtSigned(bal)}</div>
+              <div style={{fontSize:16,fontWeight:700,color:bal==null?"#4b5563":bal>=0?a.color:"#f87171"}}>{bal==null?"—":fmtSigned(pAmt(bal,pseudo))}</div>
             </div>
           );
         })}
@@ -1679,7 +1693,7 @@ function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,
                   <span style={{width:8,height:8,borderRadius:"50%",background:CAT_COLORS[cat]||"#94a3b8",display:"inline-block"}}/>
                   {cat}
                 </span>
-                <span style={{fontSize:12,color:CAT_COLORS[cat]||"#94a3b8",fontWeight:700}}>{fmt(val)}</span>
+                <span style={{fontSize:12,color:CAT_COLORS[cat]||"#94a3b8",fontWeight:700}}>{fmt(pAmt(val,pseudo))}</span>
               </div>
               <div style={{background:"#1c1f2e",borderRadius:4,height:6}}>
                 <div style={{height:"100%",borderRadius:4,background:CAT_COLORS[cat]||"#94a3b8",width:`${(val/totalSpend)*100}%`,transition:"width .4s"}}/>
@@ -1945,6 +1959,7 @@ function spendFromTxns(txns) {
 
 // ─── Spend View ───────────────────────────────────────────────────────────────
 function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
+  const pseudo = useContext(PseudoCtx);
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
@@ -2171,9 +2186,9 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                 <div key={s.name+i} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:hasDates?dotColor:"transparent",border:hasDates?"none":"2px solid #a78bfa"}}/>
-                    <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{s.name}</span>
+                    <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{pName(s.name,pseudo)}</span>
                     <span style={{fontSize:11,color:"#4b5563",marginRight:8}}>{s.frequency}</span>
-                    <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(s.amount)}</span>
+                    <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(pAmt(s.amount,pseudo))}</span>
                     {s.pinned&&<button onClick={()=>setPinnedSubs(prev=>prev.filter(p=>p.name!==s.name))} style={{background:"none",border:"none",color:"#4b5563",fontSize:14,cursor:"pointer",padding:"0 0 0 4px",lineHeight:1}}>✕</button>}
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",marginTop:4,paddingLeft:15}}>
@@ -2191,7 +2206,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
       <SectionLabel>{periodLabel(displayPeriod)}{comparePeriod?` vs ${periodLabel(comparePeriod)}`:" breakdown"}</SectionLabel>
       <div style={{background:"#0f1117",border:"1px solid #f8717140",borderRadius:10,padding:"14px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontSize:12,color:"#94a3b8",fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Total Spend</div>
-        <div style={{fontSize:26,fontWeight:700,color:"#f87171"}}>{fmt(filteredTotal)}</div>
+        <div style={{fontSize:26,fontWeight:700,color:"#f87171"}}>{fmt(pAmt(filteredTotal,pseudo))}</div>
       </div>
       {allCats.map(cat=>{
         const a=filteredSpend[cat]||0, b=filteredCmpSpend[cat]||0, delta=a-b;
@@ -2202,11 +2217,11 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
             <div onClick={()=>{setExpandedCat(isOpen?null:cat);setExpandedMerchant(null);}} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer"}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:CAT_COLORS[cat]||"#4b5563",flexShrink:0}}/>
               <span style={{fontSize:13,fontWeight:700,flex:1}}>{cat}</span>
-              {comparePeriod&&b>0&&<span style={{fontSize:11,fontWeight:700,color:delta>0?"#f87171":"#4ade80",marginRight:4}}>{delta>0?"▲":"▼"}{fmt(Math.abs(delta))}</span>}
-              <span style={{fontSize:14,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8"}}>{fmt(a)}</span>
+              {comparePeriod&&b>0&&<span style={{fontSize:11,fontWeight:700,color:delta>0?"#f87171":"#4ade80",marginRight:4}}>{delta>0?"▲":"▼"}{fmt(pAmt(Math.abs(delta),pseudo))}</span>}
+              <span style={{fontSize:14,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8"}}>{fmt(pAmt(a,pseudo))}</span>
               <span style={{fontSize:11,color:"#4b5563",marginLeft:2}}>{isOpen?"▲":"▼"}</span>
             </div>
-            {comparePeriod&&b>0&&!isOpen&&<div style={{display:"flex",justifyContent:"space-between",padding:"0 14px 8px",paddingLeft:30}}><span style={{fontSize:11,color:"#4b5563"}}>{periodLabel(comparePeriod)}: {fmt(b)}</span></div>}
+            {comparePeriod&&b>0&&!isOpen&&<div style={{display:"flex",justifyContent:"space-between",padding:"0 14px 8px",paddingLeft:30}}><span style={{fontSize:11,color:"#4b5563"}}>{periodLabel(comparePeriod)}: {fmt(pAmt(b,pseudo))}</span></div>}
             {isOpen&&(
               <div style={{borderTop:`1px solid ${CAT_COLORS[cat]||"#60a5fa"}30`,background:"#0a0b0f"}}>
                 {merchants.length===0
@@ -2219,8 +2234,8 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                       <div key={merchant} style={{borderBottom:i<merchants.length-1?"1px solid #1c1f2e":"none"}}>
                         <div onClick={()=>setExpandedMerchant(isMOpen?null:mKey)}
                           style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 14px 8px 28px",cursor:"pointer",background:isMOpen?"#111318":"transparent"}}>
-                          <span style={{fontSize:12,color:isMOpen?"#e2e4ec":"#94a3b8",fontWeight:isMOpen?700:400,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{merchant}</span>
-                          <span style={{fontSize:13,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8",flexShrink:0,marginRight:6}}>{fmt(total)}</span>
+                          <span style={{fontSize:12,color:isMOpen?"#e2e4ec":"#94a3b8",fontWeight:isMOpen?700:400,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{pName(merchant,pseudo)}</span>
+                          <span style={{fontSize:13,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8",flexShrink:0,marginRight:6}}>{fmt(pAmt(total,pseudo))}</span>
                           <span style={{fontSize:10,color:"#4b5563"}}>{isMOpen?"▲":"▼"}</span>
                         </div>
                         {isMOpen&&(
@@ -2234,8 +2249,8 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                                   <div style={{fontSize:9,color:"#fbbf24",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>🧾 Items</div>
                                   {items.map(([name,amt])=>(
                                     <div key={name} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px solid #1c1f2e30"}}>
-                                      <span style={{fontSize:11,color:"#94a3b8",flex:1,paddingRight:8}}>{name}</span>
-                                      <span style={{fontSize:11,fontWeight:700,color:"#e2e4ec"}}>{fmt(amt)}</span>
+                                      <span style={{fontSize:11,color:"#94a3b8",flex:1,paddingRight:8}}>{pName(name,pseudo)}</span>
+                                      <span style={{fontSize:11,fontWeight:700,color:"#e2e4ec"}}>{fmt(pAmt(amt,pseudo))}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -2256,7 +2271,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                                   <div style={{fontSize:11,color:"#6b7280"}}>{t.date}{receipts[t.id]?.items?.length>0&&<span style={{color:"#fbbf24",marginLeft:4}}>🧾</span>}</div>
                                   {t.note&&<div style={{fontSize:10,color:"#4b5563",fontStyle:"italic",marginTop:1}}>{t.note}</div>}
                                 </div>
-                                <span style={{fontSize:12,fontWeight:700,color:"#f87171",flexShrink:0}}>{fmt(t.amount)}</span>
+                                <span style={{fontSize:12,fontWeight:700,color:"#f87171",flexShrink:0}}>{fmt(pAmt(t.amount,pseudo))}</span>
                               </div>
                             ))}
                           </div>
@@ -2265,7 +2280,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                     );
                   })
                 }
-                {comparePeriod&&b>0&&<div style={{padding:"8px 14px",borderTop:"1px solid #1c1f2e",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,color:"#4b5563"}}>{periodLabel(comparePeriod)}</span><span style={{fontSize:12,fontWeight:700,color:delta>0?"#f87171":"#4ade80"}}>{fmt(b)} {delta>0?"▲":"▼"} {fmt(Math.abs(delta))}</span></div>}
+                {comparePeriod&&b>0&&<div style={{padding:"8px 14px",borderTop:"1px solid #1c1f2e",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:11,color:"#4b5563"}}>{periodLabel(comparePeriod)}</span><span style={{fontSize:12,fontWeight:700,color:delta>0?"#f87171":"#4ade80"}}>{fmt(pAmt(b,pseudo))} {delta>0?"▲":"▼"} {fmt(pAmt(Math.abs(delta),pseudo))}</span></div>}
               </div>
             )}
           </div>
@@ -2277,6 +2292,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
 
 // ─── Transaction List ─────────────────────────────────────────────────────────
 function TxList({txns,accounts,onCatChange,onTransferTypeChange,onNoteChange,merchantRules,setMerchantRules,receipts,onAddReceipt}) {
+  const pseudo = useContext(PseudoCtx);
   const [expanded,setExpanded]=useState(null);
   const [rulePrompt,setRulePrompt]=useState(null);
   const sorted=[...txns].sort((a,b)=>{ if(b.date!==a.date) return b.date>a.date?1:-1; return (b.rowIndex??0)-(a.rowIndex??0); });
@@ -2303,10 +2319,10 @@ function TxList({txns,accounts,onCatChange,onTransferTypeChange,onNoteChange,mer
             <div onClick={()=>setExpanded(isOpen?null:t.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",cursor:"pointer"}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:CAT_COLORS[t.category]||"#4b5563",flexShrink:0}}/>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.description}</div>
+                <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pName(t.description,pseudo)}</div>
                 <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{t.date} · {a?.name||t.accountId} · {t.category}{t.note&&<span style={{color:"#6b7280"}}> · {t.note}</span>}</div>
               </div>
-              <div style={{fontSize:14,fontWeight:700,color:t.amount>=0?"#4ade80":"#f87171",flexShrink:0}}>{t.amount>=0?"+":"-"}{fmt(t.amount)}</div>
+              <div style={{fontSize:14,fontWeight:700,color:t.amount>=0?"#4ade80":"#f87171",flexShrink:0}}>{t.amount>=0?"+":"-"}{fmt(pAmt(t.amount,pseudo))}</div>
             </div>
             {isOpen&&(
               <div style={{background:"#0a0b0f",padding:"10px 14px",borderTop:"1px solid #1c1f2e"}}>
