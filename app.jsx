@@ -1963,8 +1963,25 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
   const pinnedSubsArr = pinnedSubs || [];
   // Merge: pinned first, then auto-detected (skip auto if same name already pinned)
   const pinnedNames = new Set(pinnedSubsArr.map(p => p.name.toLowerCase()));
+  const freqToInterval = { Weekly: 7, Fortnightly: 14, Monthly: 30, Quarterly: 91, Yearly: 365 };
+  const todayD = new Date(todayStr());
   const subs = [
-    ...pinnedSubsArr.map(p => ({ ...p, pinned: true, lastPaid: null, daysSince: null, daysUntil: null, count: null })),
+    ...pinnedSubsArr.map(p => {
+      const pKey = merchantKey(p.name);
+      const matchingTxns = (allTransactions || [])
+        .filter(t => t.amount < 0 && merchantKey(t.description || "") === pKey)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      const last = matchingTxns[0];
+      if (!last) return { ...p, pinned: true, lastPaid: null, daysSince: null, daysUntil: null, nextDue: null, count: 0, possiblyEnded: false };
+      const interval = freqToInterval[p.frequency] || 30;
+      const lastDate = new Date(last.date);
+      const nextDate = new Date(lastDate.getTime() + interval * 86400000);
+      const daysSince = Math.round((todayD - lastDate) / 86400000);
+      const daysUntil = Math.round((nextDate - todayD) / 86400000);
+      const longCycle = p.frequency === "Yearly" || p.frequency === "Quarterly";
+      const possiblyEnded = !longCycle && daysSince > interval * 3;
+      return { ...p, pinned: true, lastPaid: last.date, daysSince, daysUntil, nextDue: nextDate.toISOString().slice(0, 10), count: matchingTxns.length, possiblyEnded };
+    }),
     ...autoSubs.filter(s => !pinnedNames.has(s.name.toLowerCase())),
   ];
 
@@ -2136,26 +2153,27 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
         {showSubs&&subs.length>0&&(
           <div style={{background:"#0f1117",border:"1px solid #a78bfa30",borderRadius:10,overflow:"hidden"}}>
             {subs.map((s,i)=>{
-              const overdue  = !s.pinned && !s.possiblyEnded && s.daysUntil < 0;
-              const soon     = !s.pinned && !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
-              const dotColor = s.pinned ? "#a78bfa" : s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
-              const dueLabel = s.pinned ? (s.note || "Manually pinned")
+              const hasDates  = s.daysUntil != null;
+              const overdue  = hasDates && !s.possiblyEnded && s.daysUntil < 0;
+              const soon     = hasDates && !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
+              const dotColor = s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
+              const dueLabel = !hasDates ? (s.note || "Manually pinned — no transactions found")
                 : s.possiblyEnded ? `Possibly cancelled — last paid ${s.daysSince}d ago`
                 : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil)===1?"":"s"}`
                 : s.daysUntil === 0 ? "Due today"
                 : `Due in ${s.daysUntil} day${s.daysUntil===1?"":"s"}`;
-              const lastLabel = s.pinned ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
+              const lastLabel = !hasDates ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
               return (
                 <div key={s.name+i} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:s.pinned?"transparent":dotColor,border:s.pinned?"2px solid #a78bfa":"none"}}/>
+                    <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:hasDates?dotColor:"transparent",border:hasDates?"none":"2px solid #a78bfa"}}/>
                     <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{s.name}</span>
                     <span style={{fontSize:11,color:"#4b5563",marginRight:8}}>{s.frequency}</span>
                     <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(s.amount)}</span>
                     {s.pinned&&<button onClick={()=>setPinnedSubs(prev=>prev.filter(p=>p.name!==s.name))} style={{background:"none",border:"none",color:"#4b5563",fontSize:14,cursor:"pointer",padding:"0 0 0 4px",lineHeight:1}}>✕</button>}
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",marginTop:4,paddingLeft:15}}>
-                    <span style={{fontSize:10,color:"#4b5563"}}>{lastLabel}{!s.pinned&&s.lastPaid?` · ${s.lastPaid}`:""}</span>
+                    <span style={{fontSize:10,color:"#4b5563"}}>{lastLabel}{s.lastPaid?` · ${s.lastPaid}`:""}</span>
                     <span style={{fontSize:10,fontWeight:700,color:dotColor}}>{dueLabel}</span>
                   </div>
                 </div>

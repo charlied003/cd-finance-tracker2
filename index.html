@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.13</title>
+<title>Finance Tracker v3.14</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -2207,8 +2207,23 @@ root.render(React.createElement(App));
     const autoSubs = detectSubscriptions(allTransactions || []).filter((s) => !s.possiblyEnded);
     const pinnedSubsArr = pinnedSubs || [];
     const pinnedNames = new Set(pinnedSubsArr.map((p) => p.name.toLowerCase()));
+    const freqToInterval = { Weekly: 7, Fortnightly: 14, Monthly: 30, Quarterly: 91, Yearly: 365 };
+    const todayD = new Date(todayStr());
     const subs = [
-      ...pinnedSubsArr.map((p) => __spreadProps(__spreadValues({}, p), { pinned: true, lastPaid: null, daysSince: null, daysUntil: null, count: null })),
+      ...pinnedSubsArr.map((p) => {
+        const pKey = merchantKey(p.name);
+        const matchingTxns = (allTransactions || []).filter((t) => t.amount < 0 && merchantKey(t.description || "") === pKey).sort((a, b) => b.date.localeCompare(a.date));
+        const last = matchingTxns[0];
+        if (!last) return __spreadProps(__spreadValues({}, p), { pinned: true, lastPaid: null, daysSince: null, daysUntil: null, nextDue: null, count: 0, possiblyEnded: false });
+        const interval = freqToInterval[p.frequency] || 30;
+        const lastDate = new Date(last.date);
+        const nextDate = new Date(lastDate.getTime() + interval * 864e5);
+        const daysSince = Math.round((todayD - lastDate) / 864e5);
+        const daysUntil = Math.round((nextDate - todayD) / 864e5);
+        const longCycle = p.frequency === "Yearly" || p.frequency === "Quarterly";
+        const possiblyEnded = !longCycle && daysSince > interval * 3;
+        return __spreadProps(__spreadValues({}, p), { pinned: true, lastPaid: last.date, daysSince, daysUntil, nextDue: nextDate.toISOString().slice(0, 10), count: matchingTxns.length, possiblyEnded });
+      }),
       ...autoSubs.filter((s) => !pinnedNames.has(s.name.toLowerCase()))
     ];
     const pickerMerchants = (() => {
@@ -2372,12 +2387,13 @@ root.render(React.createElement(App));
       setPendingSub(null);
       setSubSearch("");
     }, style: { width: "100%", marginTop: 8, background: "#1c1f2e", border: "1px solid #2a2d3e", borderRadius: 6, color: "#94a3b8", fontSize: 12, padding: "8px", cursor: "pointer", fontFamily: "inherit" } }, "Cancel")), showSubs && subs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #a78bfa30", borderRadius: 10, overflow: "hidden" } }, subs.map((s, i) => {
-      const overdue = !s.pinned && !s.possiblyEnded && s.daysUntil < 0;
-      const soon = !s.pinned && !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
-      const dotColor = s.pinned ? "#a78bfa" : s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
-      const dueLabel = s.pinned ? s.note || "Manually pinned" : s.possiblyEnded ? `Possibly cancelled \u2014 last paid ${s.daysSince}d ago` : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil) === 1 ? "" : "s"}` : s.daysUntil === 0 ? "Due today" : `Due in ${s.daysUntil} day${s.daysUntil === 1 ? "" : "s"}`;
-      const lastLabel = s.pinned ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
-      return /* @__PURE__ */ React.createElement("div", { key: s.name + i, style: { padding: "10px 14px", borderBottom: i < subs.length - 1 ? "1px solid #1c1f2e" : "none", opacity: s.possiblyEnded ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: s.pinned ? "transparent" : dotColor, border: s.pinned ? "2px solid #a78bfa" : "none" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.possiblyEnded ? "line-through" : "none", color: s.possiblyEnded ? "#4b5563" : "#e2e4ec" } }, s.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#4b5563", marginRight: 8 } }, s.frequency), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: s.possiblyEnded ? "#4b5563" : "#a78bfa" } }, fmt(s.amount)), s.pinned && /* @__PURE__ */ React.createElement("button", { onClick: () => setPinnedSubs((prev) => prev.filter((p) => p.name !== s.name)), style: { background: "none", border: "none", color: "#4b5563", fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, paddingLeft: 15 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, lastLabel, !s.pinned && s.lastPaid ? ` \xB7 ${s.lastPaid}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: dotColor } }, dueLabel)));
+      const hasDates = s.daysUntil != null;
+      const overdue = hasDates && !s.possiblyEnded && s.daysUntil < 0;
+      const soon = hasDates && !s.possiblyEnded && s.daysUntil >= 0 && s.daysUntil <= 5;
+      const dotColor = s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
+      const dueLabel = !hasDates ? s.note || "Manually pinned \u2014 no transactions found" : s.possiblyEnded ? `Possibly cancelled \u2014 last paid ${s.daysSince}d ago` : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil) === 1 ? "" : "s"}` : s.daysUntil === 0 ? "Due today" : `Due in ${s.daysUntil} day${s.daysUntil === 1 ? "" : "s"}`;
+      const lastLabel = !hasDates ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
+      return /* @__PURE__ */ React.createElement("div", { key: s.name + i, style: { padding: "10px 14px", borderBottom: i < subs.length - 1 ? "1px solid #1c1f2e" : "none", opacity: s.possiblyEnded ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: hasDates ? dotColor : "transparent", border: hasDates ? "none" : "2px solid #a78bfa" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.possiblyEnded ? "line-through" : "none", color: s.possiblyEnded ? "#4b5563" : "#e2e4ec" } }, s.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#4b5563", marginRight: 8 } }, s.frequency), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: s.possiblyEnded ? "#4b5563" : "#a78bfa" } }, fmt(s.amount)), s.pinned && /* @__PURE__ */ React.createElement("button", { onClick: () => setPinnedSubs((prev) => prev.filter((p) => p.name !== s.name)), style: { background: "none", border: "none", color: "#4b5563", fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, paddingLeft: 15 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, lastLabel, s.lastPaid ? ` \xB7 ${s.lastPaid}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: dotColor } }, dueLabel)));
     })), showSubs && subs.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563" } }, "No subscriptions detected \u2014 use + Add to pin one manually.")), /* @__PURE__ */ React.createElement(SectionLabel, null, periodLabel(displayPeriod), comparePeriod ? ` vs ${periodLabel(comparePeriod)}` : " breakdown"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #f8717140", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#94a3b8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "Total Spend"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 26, fontWeight: 700, color: "#f87171" } }, fmt(filteredTotal))), allCats.map((cat) => {
       const a = filteredSpend[cat] || 0, b = filteredCmpSpend[cat] || 0, delta = a - b;
       const isOpen = expandedCat === cat;
