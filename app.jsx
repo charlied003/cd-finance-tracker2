@@ -2344,14 +2344,19 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 // ─── Gmail Scan Modal ─────────────────────────────────────────────────────────
 function GmailScanModal({orders, transactions, onConfirm, onClose}) {
   const [items, setItems] = useState(() =>
-    orders.map(o => ({ order:o.order, txnId:o.matchedTxn?.id||null, msgId:o.msgId, skip:false, searching:false, search:"" }))
+    orders.map(o => ({ order:o.order, txnId:o.matchedTxn?.id||null, msgId:o.msgId, skip:false, searching:false, search:"", editing:false }))
   );
 
   const allTxns = [...transactions].filter(t=>t.amount<0).sort((a,b)=>b.date>a.date?1:-1);
 
   const update = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it,...patch} : it));
+  const updateOrder = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it, order:{...it.order,...patch}} : it));
+  const updateItem = (i, j, patch) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.map((item,jj)=>jj===j?{...item,...patch}:item)}} : it));
+  const removeItem = (i, j) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.filter((_,jj)=>jj!==j)}} : it));
+  const addItem    = (i) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:[...(it.order.items||[]),{name:"",qty:1,amount:0}]}} : it));
 
   const confirmed = items.filter(it => !it.skip && it.txnId);
+  const inputStyle = {background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:5,color:"#e2e4ec",padding:"5px 8px",fontSize:11,fontFamily:"inherit",boxSizing:"border-box"};
 
   return (
     <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:100,display:"flex",alignItems:"flex-end"}}>
@@ -2375,19 +2380,53 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
                   <div style={{fontWeight:700,fontSize:13}}>{it.order.storeName||"Unknown store"}</div>
                   <div style={{display:"flex",gap:8,alignItems:"center"}}>
                     <span style={{fontSize:13,fontWeight:700,color:"#94a3b8"}}>{it.order.orderTotal?fmt(it.order.orderTotal):""}</span>
-                    <button onClick={()=>update(i,{skip:!it.skip})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.skip?"#4ade80":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                    <button onClick={()=>update(i,{editing:!it.editing,skip:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.editing?"#60a5fa":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                      {it.editing?"done":"edit"}
+                    </button>
+                    <button onClick={()=>update(i,{skip:!it.skip,editing:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.skip?"#4ade80":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
                       {it.skip?"restore":"skip"}
                     </button>
                   </div>
                 </div>
-                <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{it.order.orderDate}</div>
-                {it.order.items?.length>0&&(
-                  <div style={{marginTop:6}}>
-                    {it.order.items.slice(0,3).map((item,j)=>(
-                      <div key={j} style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{item.qty>1?`${item.qty}× `:""}{item.name} — {fmt(item.amount)}</div>
+
+                {it.editing ? (
+                  <div style={{marginTop:8}}>
+                    {/* Store / date / total */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
+                      <input value={it.order.storeName||""} onChange={e=>updateOrder(i,{storeName:e.target.value})}
+                        placeholder="Store name" style={{...inputStyle,gridColumn:"1/-1"}}/>
+                      <input value={it.order.orderDate||""} onChange={e=>updateOrder(i,{orderDate:e.target.value})}
+                        placeholder="Date (YYYY-MM-DD)" style={inputStyle}/>
+                      <input value={it.order.orderTotal||""} onChange={e=>updateOrder(i,{orderTotal:parseFloat(e.target.value)||0})}
+                        placeholder="Total" type="number" step="0.01" style={inputStyle}/>
+                    </div>
+                    {/* Items */}
+                    <div style={{fontSize:10,color:"#4b5563",marginBottom:4}}>ITEMS</div>
+                    {(it.order.items||[]).map((item,j)=>(
+                      <div key={j} style={{display:"grid",gridTemplateColumns:"1fr 44px 64px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
+                        <input value={item.name} onChange={e=>updateItem(i,j,{name:e.target.value})}
+                          placeholder="Item name" style={inputStyle}/>
+                        <input value={item.qty} onChange={e=>updateItem(i,j,{qty:parseInt(e.target.value)||1})}
+                          placeholder="Qty" type="number" min="1" style={{...inputStyle,textAlign:"center"}}/>
+                        <input value={item.amount} onChange={e=>updateItem(i,j,{amount:parseFloat(e.target.value)||0})}
+                          placeholder="£0.00" type="number" step="0.01" style={{...inputStyle,textAlign:"right"}}/>
+                        <button onClick={()=>removeItem(i,j)} style={{background:"none",border:"none",color:"#f87171",fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
+                      </div>
                     ))}
-                    {it.order.items.length>3&&<div style={{fontSize:10,color:"#4b5563",marginTop:2}}>+{it.order.items.length-3} more items</div>}
+                    <button onClick={()=>addItem(i)} style={{background:"none",border:"1px dashed #2a2d3a",borderRadius:5,color:"#4b5563",fontSize:10,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",width:"100%",marginTop:2}}>+ add item</button>
                   </div>
+                ) : (
+                  <>
+                    <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{it.order.orderDate}</div>
+                    {it.order.items?.length>0&&(
+                      <div style={{marginTop:6}}>
+                        {it.order.items.slice(0,3).map((item,j)=>(
+                          <div key={j} style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{item.qty>1?`${item.qty}× `:""}{item.name} — {fmt(item.amount)}</div>
+                        ))}
+                        {it.order.items.length>3&&<div style={{fontSize:10,color:"#4b5563",marginTop:2}}>+{it.order.items.length-3} more items</div>}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
               {/* Transaction match */}
