@@ -628,9 +628,11 @@ async function gistSave(token, gistId, data) {
       headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    if (!res.ok) throw new Error(`Gist update failed: ${res.status}`);
-    return gistId;
-  } else {
+    if (res.ok) return gistId;
+    if (res.status !== 404) throw new Error(`Gist update failed: ${res.status}`);
+    // 404 — stale ID, fall through to create a new gist
+  }
+  {
     const res = await fetch("https://api.github.com/gists", {
       method: "POST",
       headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
@@ -1308,7 +1310,19 @@ root.render(React.createElement(App));
       </div>
 
       {modal?.type==="settings"  && <SettingsModal cycleStart={cycleStart} apiKey={apiKey} onApiKeySave={setApiKey}
-          gistToken={gistToken} syncStatus={syncStatus}
+          gistToken={gistToken} gistId={gistId} syncStatus={syncStatus}
+          onSyncNow={async ()=>{
+            if(!gistToken){showToast("No GitHub token configured","error");return;}
+            setSyncStatus("syncing");
+            try{
+              const data={version:"2.1",merchantRules,receipts,accounts,cycleStart,pinnedSubs};
+              const newId=await gistSave(gistToken,gistId,data);
+              if(newId!==gistId){setGistId(newId);localStorage.setItem(GIST_ID_KEY,newId);}
+              setSyncStatus("synced");showToast("Synced to GitHub");
+            }catch(e){setSyncStatus("error");showToast("Sync failed — check token","error");}
+          }}
+          onGistIdSave={id=>{const v=id.trim();setGistId(v);v?localStorage.setItem(GIST_ID_KEY,v):localStorage.removeItem(GIST_ID_KEY);if(v&&gistToken){setSyncStatus("syncing");syncReady.current=false;gistFetch(gistToken,v).then(remote=>{if(remote.merchantRules)setMerchantRules(r=>({...r,...remote.merchantRules}));if(remote.receipts)setReceipts(r=>({...r,...remote.receipts}));if(remote.pinnedSubs)setPinnedSubs(remote.pinnedSubs);if(remote.accounts)setAccounts(remote.accounts);if(remote.cycleStart)setCycleStart(remote.cycleStart);setSyncStatus("synced");showToast("Gist ID saved — remote data loaded");}).catch(()=>{setSyncStatus("error");showToast("Could not fetch gist with that ID","error");}).finally(()=>{setTimeout(()=>{syncReady.current=true;},600);});}else{setSyncStatus("idle");}}}
+
           onGistTokenSave={async tok=>{
             const trimmed=tok.trim();
             const knownId=gistId || localStorage.getItem(GIST_ID_KEY) || "";
@@ -1319,7 +1333,15 @@ root.render(React.createElement(App));
               syncReady.current = false;
               try {
                 let resolvedId = knownId;
-                // If we already have a gist ID, try to use it directly; otherwise search
+                // If we have a stored gist ID, verify it still exists; if not, fall back to search
+                if (resolvedId) {
+                  const check = await fetch(`https://api.github.com/gists/${resolvedId}`, { headers: { Authorization: `token ${trimmed}`, Accept: "application/vnd.github+json" } });
+                  if (!check.ok) {
+                    // Stale ID — clear it and search for an existing gist instead
+                    resolvedId = "";
+                    setGistId(""); localStorage.removeItem(GIST_ID_KEY);
+                  }
+                }
                 if (!resolvedId) {
                   const existing = await gistFindExisting(trimmed);
                   resolvedId = existing?.id || "";
@@ -1335,7 +1357,7 @@ root.render(React.createElement(App));
                   if (remote.cycleStart)    setCycleStart(remote.cycleStart);
                   showToast("Sync connected — remote data loaded");
                 } else {
-                  showToast("Sync ready — will create gist on next save");
+                  showToast("Sync ready — hit SYNC NOW to create gist");
                 }
                 setSyncStatus("synced");
               } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
@@ -2395,11 +2417,12 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady,gmailStatus,onGmailConnect,onGmailDisconnect}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,gistId,onGistTokenSave,onGistIdSave,onSyncNow,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady,gmailStatus,onGmailConnect,onGmailDisconnect}) {
   const credImportRef = useRef();
   const [val,setVal]                   = useState(cycleStart);
   const [keyInput,setKeyInput]         = useState(apiKey||"");
   const [gistInput,setGistInput]       = useState(gistToken||"");
+  const [gistIdInput,setGistIdInput]   = useState(gistId||"");
   const [starlingInput,setStarlingInput] = useState(starlingToken||"");
   const [proxyInput,setProxyInput]     = useState(starlingProxy||"");
   const [showStarlingCfg,setShowStarlingCfg] = useState(false);
@@ -2548,11 +2571,12 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
         {/* ── GitHub Sync ── */}
         <Row label="GitHub Sync">
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
               <Chip ok={Boolean(gistToken)} label={gistToken?"Connected":"Not configured"}/>
-              {gistToken&&<span style={{fontSize:10,marginLeft:8,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24"}}>
+              {gistToken&&<span style={{fontSize:10,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24"}}>
                 {syncStatus==="synced"?"✓ Synced":syncStatus==="error"?"✗ Error":"⟳ Syncing..."}
               </span>}
+              {gistToken&&<button onClick={onSyncNow} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",borderRadius:5,padding:"4px 8px",color:"#60a5fa",fontSize:10,cursor:"pointer",fontFamily:"inherit",letterSpacing:1}}>SYNC NOW</button>}
             </div>
             <CfgToggle open={showGistCfg} onToggle={()=>setShowGistCfg(v=>!v)}/>
           </div>
@@ -2561,6 +2585,16 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
               <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>GitHub Personal Access Token with <strong>gist</strong> scope — syncs rules, receipts &amp; subscriptions across devices.</div>
               <input type="password" value={gistInput} onChange={e=>setGistInput(e.target.value)} placeholder="ghp_..." style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gistInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
               <SaveBtn onClick={()=>onGistTokenSave(gistInput)} active={Boolean(gistInput)} label="SAVE & CONNECT"/>
+              <div style={{marginTop:14,borderTop:"1px solid #1c1f2e",paddingTop:12}}>
+                <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Gist ID — copy this to your other device if sync isn't finding the right gist.</div>
+                {gistId&&<div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+                  <code style={{flex:1,background:"#0a0b0f",border:"1px solid #2a2d3a",borderRadius:5,padding:"6px 8px",fontSize:10,color:"#94a3b8",wordBreak:"break-all"}}>{gistId}</code>
+                  <button onClick={()=>{navigator.clipboard.writeText(gistId).then(()=>alert("Gist ID copied!"));}} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",borderRadius:5,padding:"6px 8px",color:"#6b7280",fontSize:10,cursor:"pointer",whiteSpace:"nowrap"}}>COPY</button>
+                </div>}
+                {!gistId&&<div style={{fontSize:10,color:"#4b5563",fontStyle:"italic",marginBottom:8}}>No gist ID yet — will be created on next save.</div>}
+                <input value={gistIdInput} onChange={e=>setGistIdInput(e.target.value)} placeholder="Paste gist ID from another device..." style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gistIdInput&&gistIdInput!==gistId?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+                <SaveBtn onClick={()=>onGistIdSave(gistIdInput)} active={Boolean(gistIdInput&&gistIdInput!==gistId)} label="USE THIS GIST ID"/>
+              </div>
             </div>
           )}
         </Row>
