@@ -26,12 +26,13 @@ const APP_VERSION = "__APP_VERSION__";
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 // ─── Demo / Pseudonymise mode ─────────────────────────────────────────────────
-const PseudoCtx = React.createContext(false);
-const PSEUDO_FACTOR = 0.73;
+// Factor is randomised each time demo mode is toggled on (passed via context alongside the bool).
+// Range 0.3–0.55 keeps amounts clearly smaller than real; nobody can reverse-engineer the multiplier.
+const PseudoCtx = React.createContext({ on: false, factor: 1 });
 const PSEUDO_NAMES = ["Meridian","Harborside","Lakewood","Pinecrest","Westfield","Northgate","Clearwater","Elmwood","Riverside","Oakdale","Mapleton","Birchwood","Cedargate","Hillcrest","Brookside","Millgate","Sycamore","Fairview","Greenhill","Stonegate","Copperfield","Whitmore","Ashford","Redwood","Fernwood","Glenbrook","Silvergate","Thornfield","Wyndham","Bramblewood"];
 function _pseudoHash(s) { let h=0; for(let i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))&0xffff; return h; }
-function pAmt(x, on) { if (!on) return x; return Math.round(Math.abs(x)*PSEUDO_FACTOR*(x<0?-1:1)*100)/100; }
-function pName(s, on) { if (!on || !s) return s; return PSEUDO_NAMES[_pseudoHash(s)%PSEUDO_NAMES.length]; }
+function pAmt(x, ctx) { if (!ctx.on) return x; return Math.round(Math.abs(x)*ctx.factor*(x<0?-1:1)*100)/100; }
+function pName(s, ctx) { if (!ctx.on || !s) return s; return PSEUDO_NAMES[_pseudoHash(s)%PSEUDO_NAMES.length]; }
 const STORAGE_KEY = "finance-tracker-v5";
 const DEFAULT_CYCLE_START = 25;
 const EXCLUDE_FROM_SPEND  = ["Savings","SavingsReturn","Transfer"];
@@ -714,7 +715,7 @@ export default function App() {
   const [gistToken, setGistToken]           = useState("");
   const [gistId, setGistId]                 = useState("");
   const [syncStatus, setSyncStatus]         = useState("idle"); // "idle"|"syncing"|"synced"|"error"
-  const [pseudo, setPseudo]                 = useState(false); // demo/pseudonymise mode
+  const [pseudo, setPseudo]                 = useState({ on: false, factor: 1 }); // demo/pseudonymise mode
   const syncTimer                           = useRef(null);
   const syncReady                           = useRef(false);
   const [monzoStatus, setMonzoStatus]       = useState("disconnected"); // disconnected|connecting|connected|expired
@@ -1326,7 +1327,7 @@ root.render(React.createElement(App));
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <PseudoCtx.Provider value={pseudo}>
+    <PseudoCtx.Provider value={pseudo}> {/* pseudo = { on, factor } */}
     <div style={{minHeight:"100vh",background:"#0a0b0f",color:"#e2e4ec",fontFamily:"'DM Mono','Fira Mono',monospace",paddingBottom:80}}>
 
       {/* Header */}
@@ -1340,7 +1341,7 @@ root.render(React.createElement(App));
             <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginTop:1}}>Overview</div>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>setPseudo(p=>!p)} title={pseudo?"Exit demo mode":"Demo mode — hides real amounts & names"} style={{background:pseudo?"#a78bfa20":"#1c1f2e",border:`1px solid ${pseudo?"#a78bfa60":"#2a2d3a"}`,color:pseudo?"#a78bfa":"#4b5563",borderRadius:8,padding:"8px 10px",fontSize:13,cursor:"pointer"}}>{pseudo?"🔓":"🔒"}</button>
+            <button onClick={()=>setPseudo(p=>p.on?{on:false,factor:1}:{on:true,factor:0.3+Math.random()*0.25})} title={pseudo.on?"Exit demo mode":"Demo mode — hides real amounts & names"} style={{background:pseudo.on?"#a78bfa20":"#1c1f2e",border:`1px solid ${pseudo.on?"#a78bfa60":"#2a2d3a"}`,color:pseudo.on?"#a78bfa":"#4b5563",borderRadius:8,padding:"8px 10px",fontSize:13,cursor:"pointer"}}>{pseudo.on?"🔓":"🔒"}</button>
             <button onClick={()=>setModal({type:"rules"})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>RULES</button>
             <button onClick={exportHTML} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>↓ HTML</button>
             <button onClick={()=>setReceiptModal({step:"upload",pinnedTxId:null,queue:[],currentIdx:0})} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"8px 12px",fontSize:14,cursor:"pointer"}}>🧾</button>
@@ -1637,7 +1638,7 @@ root.render(React.createElement(App));
         onClose={()=>setGmailModal(null)} />}
 
       {toast && <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#f87171":"#4ade80",color:"#0a0b0f",borderRadius:8,padding:"10px 20px",fontWeight:700,fontSize:13,zIndex:200,letterSpacing:0.5,boxShadow:"0 8px 32px rgba(0,0,0,.5)",whiteSpace:"nowrap"}}>{toast.msg}</div>}
-      {pseudo&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#a78bfa",color:"#0a0b0f",textAlign:"center",fontSize:10,fontWeight:700,letterSpacing:3,padding:"3px 0",zIndex:300}}>DEMO MODE — AMOUNTS & NAMES ANONYMISED</div>}
+      {pseudo.on&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#a78bfa",color:"#0a0b0f",textAlign:"center",fontSize:10,fontWeight:700,letterSpacing:3,padding:"3px 0",zIndex:300}}>DEMO MODE — AMOUNTS & NAMES ANONYMISED</div>}
     </div>
     </PseudoCtx.Provider>
   );

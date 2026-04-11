@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.17</title>
+<title>Finance Tracker v3.18</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -101,22 +101,21 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.17";
+  const APP_VERSION = "3.18";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const PseudoCtx = React.createContext(false);
-  const PSEUDO_FACTOR = 0.73;
+  const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
   function _pseudoHash(s) {
     let h = 0;
     for (let i = 0; i < (s || "").length; i++) h = h * 31 + s.charCodeAt(i) & 65535;
     return h;
   }
-  function pAmt(x, on) {
-    if (!on) return x;
-    return Math.round(Math.abs(x) * PSEUDO_FACTOR * (x < 0 ? -1 : 1) * 100) / 100;
+  function pAmt(x, ctx) {
+    if (!ctx.on) return x;
+    return Math.round(Math.abs(x) * ctx.factor * (x < 0 ? -1 : 1) * 100) / 100;
   }
-  function pName(s, on) {
-    if (!on || !s) return s;
+  function pName(s, ctx) {
+    if (!ctx.on || !s) return s;
     return PSEUDO_NAMES[_pseudoHash(s) % PSEUDO_NAMES.length];
   }
   const STORAGE_KEY = "finance-tracker-v5";
@@ -896,7 +895,7 @@ ${clean}` }]
     const [gistToken, setGistToken] = useState("");
     const [gistId, setGistId] = useState("");
     const [syncStatus, setSyncStatus] = useState("idle");
-    const [pseudo, setPseudo] = useState(false);
+    const [pseudo, setPseudo] = useState({ on: false, factor: 1 });
     const syncTimer = useRef(null);
     const syncReady = useRef(false);
     const [monzoStatus, setMonzoStatus] = useState("disconnected");
@@ -1592,7 +1591,7 @@ root.render(React.createElement(App));
         setGmailSyncing(false);
       });
     }
-    return /* @__PURE__ */ React.createElement(PseudoCtx.Provider, { value: pseudo }, /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#2a2d3e", fontWeight: 700, letterSpacing: 1 } }, "v", APP_VERSION)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setPseudo((p) => !p), title: pseudo ? "Exit demo mode" : "Demo mode \u2014 hides real amounts & names", style: { background: pseudo ? "#a78bfa20" : "#1c1f2e", border: `1px solid ${pseudo ? "#a78bfa60" : "#2a2d3a"}`, color: pseudo ? "#a78bfa" : "#4b5563", borderRadius: 8, padding: "8px 10px", fontSize: 13, cursor: "pointer" } }, pseudo ? "\u{1F513}" : "\u{1F512}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setReceiptModal({ step: "upload", pinnedTxId: null, queue: [], currentIdx: 0 }), style: { background: "#fbbf2415", border: "1px solid #fbbf2440", color: "#fbbf24", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u{1F9FE}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
+    return /* @__PURE__ */ React.createElement(PseudoCtx.Provider, { value: pseudo }, " ", /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#2a2d3e", fontWeight: 700, letterSpacing: 1 } }, "v", APP_VERSION)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setPseudo((p) => p.on ? { on: false, factor: 1 } : { on: true, factor: 0.3 + Math.random() * 0.25 }), title: pseudo.on ? "Exit demo mode" : "Demo mode \u2014 hides real amounts & names", style: { background: pseudo.on ? "#a78bfa20" : "#1c1f2e", border: `1px solid ${pseudo.on ? "#a78bfa60" : "#2a2d3a"}`, color: pseudo.on ? "#a78bfa" : "#4b5563", borderRadius: 8, padding: "8px 10px", fontSize: 13, cursor: "pointer" } }, pseudo.on ? "\u{1F513}" : "\u{1F512}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setReceiptModal({ step: "upload", pinnedTxId: null, queue: [], currentIdx: 0 }), style: { background: "#fbbf2415", border: "1px solid #fbbf2440", color: "#fbbf24", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u{1F9FE}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
       background: activeAccounts.includes(a.id) ? a.color + "22" : "#1c1f2e",
       border: `1.5px solid ${activeAccounts.includes(a.id) ? a.color : "#1c1f2e"}`,
       color: activeAccounts.includes(a.id) ? a.color : "#4b5563",
@@ -2063,7 +2062,7 @@ root.render(React.createElement(App));
         },
         onClose: () => setGmailModal(null)
       }
-    ), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#f87171" : "#4ade80", color: "#0a0b0f", borderRadius: 8, padding: "10px 20px", fontWeight: 700, fontSize: 13, zIndex: 200, letterSpacing: 0.5, boxShadow: "0 8px 32px rgba(0,0,0,.5)", whiteSpace: "nowrap" } }, toast.msg), pseudo && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: "#a78bfa", color: "#0a0b0f", textAlign: "center", fontSize: 10, fontWeight: 700, letterSpacing: 3, padding: "3px 0", zIndex: 300 } }, "DEMO MODE \u2014 AMOUNTS & NAMES ANONYMISED")));
+    ), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#f87171" : "#4ade80", color: "#0a0b0f", borderRadius: 8, padding: "10px 20px", fontWeight: 700, fontSize: 13, zIndex: 200, letterSpacing: 0.5, boxShadow: "0 8px 32px rgba(0,0,0,.5)", whiteSpace: "nowrap" } }, toast.msg), pseudo.on && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 0, left: 0, right: 0, background: "#a78bfa", color: "#0a0b0f", textAlign: "center", fontSize: 10, fontWeight: 700, letterSpacing: 3, padding: "3px 0", zIndex: 300 } }, "DEMO MODE \u2014 AMOUNTS & NAMES ANONYMISED")));
   }
   function Dashboard({ accounts, activeAccounts, periods, displayPeriod, comparePeriod, setComparePeriod, visibleTxns, spending, totalSpend, totalIncome, getAccountBalance, getSavingsAllocated, periodLabel, devServices, setDevServices, aiScanCount }) {
     const pseudo = useContext(PseudoCtx);
