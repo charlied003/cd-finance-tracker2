@@ -613,8 +613,7 @@ const DEFAULT_RULES = {
       const urlParams = new URLSearchParams(window.location.search);
       const oauthCode  = urlParams.get("code");
       const oauthState = urlParams.get("state");
-      const savedState = localStorage.getItem(MONZO_STATE_KEY);
-      if (oauthCode && oauthState && oauthState === savedState) {
+      if (oauthCode && localStorage.getItem(MONZO_VERIFIER_KEY)) {
         window.history.replaceState({}, "", window.location.pathname);
         localStorage.removeItem(MONZO_STATE_KEY);
         setMonzoStatus("connecting");
@@ -629,10 +628,6 @@ const DEFAULT_RULES = {
           setToast({ msg: `Monzo connection failed: ${e.message}`, type: "error" });
           setTimeout(() => setToast(null), 3500);
         }
-      } else if (oauthCode && oauthState && oauthState !== savedState) {
-        window.history.replaceState({}, "", window.location.pathname);
-        setToast({ msg: `Monzo: state mismatch — try connecting again`, type: "error" });
-        setTimeout(() => setToast(null), 5000);
       } else if (localStorage.getItem(MONZO_ACCESS_KEY)) {
         setMonzoStatus("connected");
       }
