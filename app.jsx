@@ -297,6 +297,9 @@ function matchReceiptToTransaction(extracted, transactions) {
 
 // ─── Bank API / Monzo OAuth (PKCE) ───────────────────────────────────────────
 const STARLING_TOKEN_KEY  = "finance-tracker-starling-token";
+const STARLING_PROXY_KEY  = "finance-tracker-starling-proxy";
+const DEV_SERVICES_KEY    = "finance-tracker-dev-services";
+const AI_SCAN_COUNT_KEY   = "finance-tracker-ai-scans";
 const MONZO_ACCESS_KEY    = "finance-tracker-monzo-access";
 const MONZO_REFRESH_KEY   = "finance-tracker-monzo-refresh";
 const MONZO_EXPIRY_KEY    = "finance-tracker-monzo-expiry";
@@ -414,8 +417,9 @@ function monzoToInternal(tx, idx) {
 
 // ─── Starling Sync ───────────────────────────────────────────────────────────
 
-async function starlingGetAccount(token) {
-  const res = await fetch("https://api.starlingbank.com/api/v2/accounts", {
+async function starlingGetAccount(token, proxyBase) {
+  const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+  const res = await fetch(`${base}/accounts`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
   });
   if (!res.ok) throw new Error(`Starling auth failed (${res.status}) — check your token`);
@@ -425,8 +429,9 @@ async function starlingGetAccount(token) {
   return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
 }
 
-async function starlingFetchTransactions(token, accountUid, categoryUid, since) {
-  const url = `https://api.starlingbank.com/api/v2/feed/account/${accountUid}/category/${categoryUid}?changesSince=${encodeURIComponent(since)}`;
+async function starlingFetchTransactions(token, accountUid, categoryUid, since, proxyBase) {
+  const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+  const url = `${base}/feed/account/${accountUid}/category/${categoryUid}?changesSince=${encodeURIComponent(since)}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
   });
@@ -538,7 +543,22 @@ export default function App() {
   const syncReady                           = useRef(false);
   const [monzoStatus, setMonzoStatus]       = useState("disconnected"); // disconnected|connecting|connected|expired
   const [starlingToken, setStarlingToken]   = useState("");
+  const [starlingProxy, setStarlingProxy]   = useState("");
   const [bankSyncing, setBankSyncing]       = useState(false);
+  const [devServices, setDevServices]       = useState(() => {
+    try {
+      const saved = localStorage.getItem(DEV_SERVICES_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      { id: "cf",        name: "Cloudflare Workers", costPence: 0,  notes: "Free tier — 100k req/day" },
+      { id: "github",    name: "GitHub Pages + Gist", costPence: 0, notes: "Free" },
+      { id: "anthropic", name: "Anthropic API",       costPence: 0, notes: "Pay per use — receipt scanning & categorisation" },
+    ];
+  });
+  const [aiScanCount, setAiScanCount]       = useState(() => {
+    try { return JSON.parse(localStorage.getItem(AI_SCAN_COUNT_KEY) || "{}"); } catch { return {}; }
+  });
   const fileRef     = useRef();
   const receiptRef  = useRef();
 
@@ -598,9 +618,11 @@ const DEFAULT_RULES = {
         setMonzoStatus("connected");
       }
 
-      // Load Starling token and other bank tokens
+      // Load Starling token and proxy URL
       const starlingTok = localStorage.getItem(STARLING_TOKEN_KEY) || "";
       if (starlingTok) setStarlingToken(starlingTok);
+      const starlingProx = localStorage.getItem(STARLING_PROXY_KEY) || "";
+      if (starlingProx) setStarlingProxy(starlingProx);
 
       // Load Gist credentials (stored separately, never exported)
       const tok = localStorage.getItem(GIST_TOKEN_KEY) || "";
@@ -757,6 +779,15 @@ root.render(React.createElement(App));
     setImportState(s => ({...s, step:"preview", rows:withCats, preview:withCats.slice(0,10), isMonzo}));
   }
 
+  function trackAiScan(type) {
+    const monthKey = new Date().toISOString().slice(0, 7);
+    setAiScanCount(prev => {
+      const next = { ...prev, [monthKey]: { ...(prev[monthKey] || {}), [type]: ((prev[monthKey]?.[type]) || 0) + 1 } };
+      try { localStorage.setItem(AI_SCAN_COUNT_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
   async function runAICategorise() {
     setLoading(true);
     try {
@@ -767,6 +798,7 @@ root.render(React.createElement(App));
         rows:    s.rows.map((r,i)    => ({...r, category:map[i]||r.category})),
         preview: s.rows.slice(0,10).map((r,i) => ({...r, category:map[i]||r.category})),
       }));
+      trackAiScan("categorise");
       showToast("AI categorisation done");
     } catch { showToast("AI failed — using smart defaults","error"); }
     setLoading(false);
@@ -819,13 +851,13 @@ root.render(React.createElement(App));
     if (bankSyncing) return;
     setBankSyncing(true);
     try {
-      const { accountUid, categoryUid } = await starlingGetAccount(starlingToken);
+      const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
       const since = lastDate
         ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
         : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
-      const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+      const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
       const existingIds = new Set(transactions.map(t => t.id));
       const fresh = raw.map((item, i) => starlingToInternal(item, i)).filter(t => t && !existingIds.has(t.id));
       if (!fresh.length) { showToast("Starling — already up to date"); return; }
@@ -848,7 +880,7 @@ root.render(React.createElement(App));
     try {
       if (starlingToken) {
         try {
-          const { accountUid, categoryUid } = await starlingGetAccount(starlingToken);
+          const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
           console.log("[Starling] account", accountUid, "category", categoryUid);
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
@@ -856,7 +888,7 @@ root.render(React.createElement(App));
             ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000).toISOString()
             : new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
           console.log("[Starling] fetching since", since);
-          const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since);
+          const raw = await starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
           console.log("[Starling] raw items", raw.length, raw[0]);
           if (!raw.length) {
             finalMsg = "Starling: API returned 0 items — check token permissions";
@@ -1000,7 +1032,9 @@ root.render(React.createElement(App));
               accounts={accounts} activeAccounts={activeAccounts} periods={periods}
               displayPeriod={displayPeriod} comparePeriod={comparePeriod} setComparePeriod={setComparePeriod}
               visibleTxns={visibleTxns} spending={spending} totalSpend={totalSpend} totalIncome={totalIncome}
-              getAccountBalance={getAccountBalance} getSavingsAllocated={getSavingsAllocated} periodLabel={periodLabel} />}
+              getAccountBalance={getAccountBalance} getSavingsAllocated={getSavingsAllocated} periodLabel={periodLabel}
+              devServices={devServices} setDevServices={s=>{setDevServices(s);try{localStorage.setItem(DEV_SERVICES_KEY,JSON.stringify(s));}catch{}}}
+              aiScanCount={aiScanCount} />}
             {view==="spend" && <SpendView
               spending={spending} compareSpend={compareSpend} totalSpend={totalSpend}
               displayPeriod={displayPeriod} comparePeriod={comparePeriod} periods={periods}
@@ -1043,6 +1077,7 @@ root.render(React.createElement(App));
           monzoStatus={monzoStatus} onMonzoConnect={connectMonzo}
           onMonzoDisconnect={()=>{ monzoClearTokens(); setMonzoStatus("disconnected"); showToast("Monzo disconnected"); }}
           starlingToken={starlingToken} onStarlingTokenSave={tok=>{const t=tok.trim();setStarlingToken(t);t?localStorage.setItem(STARLING_TOKEN_KEY,t):localStorage.removeItem(STARLING_TOKEN_KEY);showToast(t?"Starling token saved":"Starling token cleared");}}
+          starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
           onSave={v=>{setCycleStart(v);setSelectedPeriod(null);setComparePeriod(null);setModal(null);showToast(`Pay cycle: ${ordinal(v)} of month`);}} onClose={()=>setModal(null)} />}
       {modal?.type==="import"    && <ImportModal importState={importState} setImportState={setImportState} accounts={accounts} fileRef={fileRef} onFile={handleCSVFile} onAI={runAICategorise} onConfirm={confirmImport} onClose={()=>{setModal(null);setImportState({step:"upload",accountId:"",rows:[],preview:[],isMonzo:false});}} loading={loading} onClearAccount={(id)=>{setTransactions(prev=>prev.filter(t=>t.accountId!==id));showToast("Cleared");}} />}
       {modal?.type==="addAccount"&& <AddAccountModal onSave={a=>{setAccounts(prev=>[...prev,a]);setActiveAccounts(prev=>[...prev,a.id]);setModal(null);showToast("Account added");}} onClose={()=>setModal(null)} />}
@@ -1058,7 +1093,7 @@ root.render(React.createElement(App));
         state={receiptModal} setState={setReceiptModal}
         transactions={transactions} fileRef={receiptRef} apiKey={apiKey}
         onSave={(txId,data)=>{setReceipts(prev=>({...prev,[txId]:data}));setReceiptModal(null);showToast("Receipt saved");}}
-        onClose={()=>setReceiptModal(null)} />}
+        onClose={()=>setReceiptModal(null)} onAiScan={()=>trackAiScan("receipt")} />}
 
       {toast && <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#f87171":"#4ade80",color:"#0a0b0f",borderRadius:8,padding:"10px 20px",fontWeight:700,fontSize:13,zIndex:200,letterSpacing:0.5,boxShadow:"0 8px 32px rgba(0,0,0,.5)",whiteSpace:"nowrap"}}>{toast.msg}</div>}
     </div>
@@ -1066,7 +1101,7 @@ root.render(React.createElement(App));
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,setComparePeriod,visibleTxns,spending,totalSpend,totalIncome,getAccountBalance,getSavingsAllocated,periodLabel}) {
+function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,setComparePeriod,visibleTxns,spending,totalSpend,totalIncome,getAccountBalance,getSavingsAllocated,periodLabel,devServices,setDevServices,aiScanCount}) {
   const topCats    = Object.entries(spending).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const net        = totalIncome - totalSpend;
   const toSavings  = visibleTxns.filter(t=>t.category==="Savings"&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0) - visibleTxns.filter(t=>t.category==="SavingsReturn").reduce((s,t)=>s+Math.abs(t.amount),0);
@@ -1124,12 +1159,133 @@ function Dashboard({accounts,activeAccounts,periods,displayPeriod,comparePeriod,
       </>}
 
       <SectionLabel>Compare with</SectionLabel>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:24}}>
         <button onClick={()=>setComparePeriod(null)} style={{background:!comparePeriod?"#60a5fa":"#1c1f2e",color:!comparePeriod?"#0a0b0f":"#4b5563",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>NONE</button>
         {periods.filter(p=>p!==displayPeriod).slice(0,6).map(pk=>(
           <button key={pk} onClick={()=>setComparePeriod(pk)} style={{background:comparePeriod===pk?"#60a5fa":"#1c1f2e",color:comparePeriod===pk?"#0a0b0f":"#4b5563",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{periodLabel(pk)}</button>
         ))}
       </div>
+
+      <InfraCard devServices={devServices} setDevServices={setDevServices} aiScanCount={aiScanCount} />
+    </div>
+  );
+}
+
+// ─── Infrastructure Cost Card ─────────────────────────────────────────────────
+// Haiku pricing (as of 2025): input $0.80/MTok, output $4.00/MTok
+// Receipt scan ≈ 1000 input + 400 output tokens ≈ $0.0024
+// Categorisation ≈ 600 input + 300 output tokens ≈ $0.0016
+const HAIKU_RECEIPT_COST_GBP  = 0.0019; // ~$0.0024 at ~0.79 GBP/USD
+const HAIKU_CATEGORISE_COST_GBP = 0.0013;
+
+function InfraCard({devServices, setDevServices, aiScanCount}) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // {id, name, costPence, notes}
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({name:"",costPence:0,notes:""});
+
+  const monthKey = new Date().toISOString().slice(0,7);
+  const thisMonth = aiScanCount?.[monthKey] || {};
+  const receiptScans = thisMonth.receipt || 0;
+  const categoriseRuns = thisMonth.categorise || 0;
+  const estimatedAiGbp = receiptScans * HAIKU_RECEIPT_COST_GBP + categoriseRuns * HAIKU_CATEGORISE_COST_GBP;
+
+  const fixedMonthlyCostPence = devServices.filter(s=>s.id!=="anthropic").reduce((sum,s)=>sum+(s.costPence||0),0);
+  const totalMonthlyGbp = fixedMonthlyCostPence/100 + estimatedAiGbp;
+
+  function saveEdit() {
+    if (editing) {
+      setDevServices(devServices.map(s=>s.id===editing.id?{...s,name:draft.name,costPence:Number(draft.costPence),notes:draft.notes}:s));
+    } else {
+      setDevServices([...devServices, {id:uid(),name:draft.name,costPence:Number(draft.costPence),notes:draft.notes}]);
+    }
+    setEditing(null); setAdding(false); setDraft({name:"",costPence:0,notes:""});
+  }
+
+  function startEdit(svc) { setDraft({name:svc.name,costPence:svc.costPence,notes:svc.notes}); setEditing(svc); setAdding(false); }
+  function startAdd() { setDraft({name:"",costPence:0,notes:""}); setAdding(true); setEditing(null); }
+
+  return (
+    <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:12,marginBottom:16,overflow:"hidden"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",background:"transparent",border:"none",padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",color:"#e2e4ec"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:10,letterSpacing:3,color:"#60a5fa",fontWeight:700,textTransform:"uppercase"}}>Infrastructure</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:14,fontWeight:700,color:totalMonthlyGbp>0?"#f87171":"#4ade80"}}>
+            {totalMonthlyGbp===0?"Free":"-"+fmt(totalMonthlyGbp)+"/mo"}
+          </span>
+          <span style={{color:"#4b5563",fontSize:12}}>{open?"▲":"▼"}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div style={{padding:"0 16px 16px"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{color:"#4b5563"}}>
+                <th style={{textAlign:"left",padding:"6px 0",fontWeight:700,letterSpacing:1,fontSize:10}}>SERVICE</th>
+                <th style={{textAlign:"right",padding:"6px 0",fontWeight:700,letterSpacing:1,fontSize:10}}>COST/MO</th>
+                <th style={{width:40}}/>
+              </tr>
+            </thead>
+            <tbody>
+              {devServices.map(svc=>(
+                <tr key={svc.id} style={{borderTop:"1px solid #1c1f2e"}}>
+                  <td style={{padding:"8px 0"}}>
+                    <div style={{fontWeight:700,color:"#e2e4ec"}}>{svc.name}</div>
+                    {svc.id==="anthropic"?(
+                      <div style={{color:"#4b5563",fontSize:10,marginTop:2}}>
+                        {receiptScans} receipt scan{receiptScans!==1?"s":""}, {categoriseRuns} categorisation{categoriseRuns!==1?"s":""} this month
+                      </div>
+                    ):svc.notes?(
+                      <div style={{color:"#4b5563",fontSize:10,marginTop:2}}>{svc.notes}</div>
+                    ):null}
+                  </td>
+                  <td style={{textAlign:"right",padding:"8px 0",fontWeight:700,color:svc.id==="anthropic"?(estimatedAiGbp>0?"#f87171":"#4ade80"):svc.costPence>0?"#f87171":"#4ade80",whiteSpace:"nowrap"}}>
+                    {svc.id==="anthropic"
+                      ? (estimatedAiGbp===0?"Free":"~"+fmt(estimatedAiGbp))
+                      : svc.costPence===0?"Free":"-"+fmt(svc.costPence/100)}
+                  </td>
+                  <td style={{textAlign:"right"}}>
+                    {svc.id!=="cf"&&svc.id!=="github"&&svc.id!=="anthropic"&&(
+                      <button onClick={()=>startEdit(svc)} style={{background:"transparent",border:"none",color:"#4b5563",cursor:"pointer",fontSize:12,padding:"4px"}}>✎</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{borderTop:"2px solid #2a2d3a"}}>
+                <td style={{padding:"10px 0",fontWeight:700,fontSize:12,letterSpacing:1,color:"#94a3b8"}}>TOTAL EST.</td>
+                <td style={{textAlign:"right",fontWeight:700,fontSize:14,color:totalMonthlyGbp>0?"#f87171":"#4ade80"}}>
+                  {totalMonthlyGbp===0?"Free":"~"+fmt(totalMonthlyGbp)+"/mo"}
+                </td>
+                <td/>
+              </tr>
+            </tfoot>
+          </table>
+
+          {(editing||adding) && (
+            <div style={{background:"#1c1f2e",borderRadius:8,padding:12,marginTop:8}}>
+              <input value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="Service name" style={{width:"100%",background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 10px",color:"#e2e4ec",fontSize:12,marginBottom:8}} />
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input type="number" value={draft.costPence/100} onChange={e=>setDraft(d=>({...d,costPence:Math.round(parseFloat(e.target.value||0)*100)}))} placeholder="£/month" step="0.01" min="0" style={{flex:1,background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 10px",color:"#e2e4ec",fontSize:12}} />
+              </div>
+              <input value={draft.notes} onChange={e=>setDraft(d=>({...d,notes:e.target.value}))} placeholder="Notes (optional)" style={{width:"100%",background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 10px",color:"#e2e4ec",fontSize:12,marginBottom:8}} />
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveEdit} style={{flex:1,background:"#60a5fa20",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:6,padding:"6px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Save</button>
+                <button onClick={()=>{setEditing(null);setAdding(false);}} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:6,padding:"6px",fontSize:12,cursor:"pointer"}}>Cancel</button>
+                {editing&&<button onClick={()=>{setDevServices(devServices.filter(s=>s.id!==editing.id));setEditing(null);}} style={{background:"#f8717120",border:"1px solid #f8717140",color:"#f87171",borderRadius:6,padding:"6px 10px",fontSize:12,cursor:"pointer"}}>Delete</button>}
+              </div>
+            </div>
+          )}
+
+          {!editing&&!adding&&(
+            <button onClick={startAdd} style={{marginTop:8,width:"100%",background:"transparent",border:"1.5px dashed #2a2d3a",color:"#4b5563",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer"}}>+ Add service</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1645,7 +1801,7 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 }
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave}) {
   const [val,setVal]=useState(cycleStart);
   const [keyInput,setKeyInput]=useState(apiKey||"");
   const [keyVisible,setKeyVisible]=useState(false);
@@ -1653,6 +1809,7 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
   const [gistVisible,setGistVisible]=useState(false);
   const [starlingInput,setStarlingInput]=useState(starlingToken||"");
   const [starlingVisible,setStarlingVisible]=useState(false);
+  const [proxyInput,setProxyInput]=useState(starlingProxy||"");
   const hasMonzoCfg = Boolean(window.MONZO_CONFIG);
   const days=Array.from({length:28},(_,i)=>i+1);
   const endDay=val===1?31:val-1;
@@ -1717,13 +1874,18 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
         </div>
         <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
           <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>STARLING — MAIN ACCOUNT</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Personal access token from <span style={{color:"#94a3b8"}}>developer.starlingbank.com</span>. Save your token now — sync will be enabled in the next update.</div>
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Personal access token from <span style={{color:"#94a3b8"}}>developer.starlingbank.com</span>.</div>
           <div style={{display:"flex",gap:6,marginBottom:8}}>
             <input type={starlingVisible?"text":"password"} value={starlingInput} onChange={e=>setStarlingInput(e.target.value)} placeholder="eyJ..." style={{flex:1,background:"#1c1f2e",border:`1.5px solid ${starlingInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none"}}/>
             <button onClick={()=>setStarlingVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{starlingVisible?"Hide":"Show"}</button>
           </div>
-          <button onClick={()=>onStarlingTokenSave(starlingInput)} style={{width:"100%",background:starlingInput?"#60a5fa":"#1c1f2e",border:"none",color:starlingInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:starlingInput?"pointer":"default",letterSpacing:1}}>SAVE TOKEN</button>
-          {starlingToken&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Connected — use ↓ SYNC to fetch transactions</div>}
+          <button onClick={()=>onStarlingTokenSave(starlingInput)} style={{width:"100%",background:starlingInput?"#60a5fa":"#1c1f2e",border:"none",color:starlingInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:starlingInput?"pointer":"default",letterSpacing:1,marginBottom:8}}>SAVE TOKEN</button>
+          <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6,marginTop:4}}>CLOUDFLARE PROXY URL</div>
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:8,lineHeight:1.6}}>Required for Starling sync. Deploy <span style={{color:"#94a3b8"}}>worker.js</span> to Cloudflare Workers and paste the URL here (e.g. <span style={{color:"#94a3b8"}}>https://cd-finance-starling-proxy.workers.dev</span>).</div>
+          <input value={proxyInput} onChange={e=>setProxyInput(e.target.value)} placeholder="https://....workers.dev" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${proxyInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",marginBottom:8,boxSizing:"border-box"}}/>
+          <button onClick={()=>onStarlingProxySave(proxyInput)} style={{width:"100%",background:proxyInput?"#60a5fa":"#1c1f2e",border:"none",color:proxyInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:proxyInput?"pointer":"default",letterSpacing:1}}>SAVE PROXY URL</button>
+          {starlingToken&&starlingProxy&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Ready — use ↓ SYNC to fetch transactions</div>}
+          {starlingToken&&!starlingProxy&&<div style={{fontSize:10,color:"#fbbf24",marginTop:6,textAlign:"center"}}>⚠ Token saved but proxy URL needed for sync</div>}
         </div>
         <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>PAY CYCLE</div>
         <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>
@@ -1942,7 +2104,7 @@ function ReceiptsView({transactions, receipts, onAdd}) {
 }
 
 // ─── Receipt Modal ────────────────────────────────────────────────────────────
-function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, apiKey}) {
+function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, apiKey, onAiScan}) {
   const [loading, setLoading]       = useState(false);
   const [editItems, setEditItems]   = useState(null);
   const [selectedTxId, setSelectedTxId] = useState(state.pinnedTxId||null);
@@ -1953,6 +2115,7 @@ function ReceiptModal({state, setState, transactions, fileRef, onSave, onClose, 
       if(!key){ setState(s=>({...s,step:"error",errorMsg:"No API key — add one in ⚙ Settings"})); return; }
       aiExtractReceipt(state.base64, state.mediaType, key)
         .then(extracted=>{
+          onAiScan?.();
           const candidates=matchReceiptToTransaction(extracted,transactions);
           const bestMatch=state.pinnedTxId?state.pinnedTxId:(candidates[0]?.id||null);
           setSelectedTxId(bestMatch);
