@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.12</title>
+<title>Finance Tracker v3.13</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -2196,6 +2196,7 @@ root.render(React.createElement(App));
     const [subSearch, setSubSearch] = useState("");
     const [pendingSub, setPendingSub] = useState(null);
     const [pendingFreq, setPendingFreq] = useState("Monthly");
+    const [pendingTxnAmount, setPendingTxnAmount] = useState(null);
     const subTxnIds = computeSubTxnIds(allTransactions, pinnedSubs);
     const spendTxns = visibleTxns.filter((t) => !subTxnIds.has(t.id));
     const cmpTxns = (compareTxns || []).filter((t) => !subTxnIds.has(t.id));
@@ -2288,6 +2289,7 @@ root.render(React.createElement(App));
           onClick: () => {
             setPendingSub(selected ? null : m);
             setPendingFreq("Monthly");
+            setPendingTxnAmount(null);
           },
           style: {
             display: "flex",
@@ -2299,9 +2301,46 @@ root.render(React.createElement(App));
             borderBottom: "1px solid #1c1f2e"
           }
         },
-        /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: selected ? "#a78bfa" : "#e2e4ec" } }, m.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, m.count, " transaction", m.count !== 1 ? "s" : "")),
-        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: selected ? "#a78bfa" : "#94a3b8" } }, fmt(m.avgAmount))
-      ), selected && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "#0a0b0f", borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6 } }, "Frequency"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, ["Weekly", "Monthly", "Quarterly", "Yearly"].map((f) => /* @__PURE__ */ React.createElement(
+        /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: selected ? "#a78bfa" : "#e2e4ec" } }, m.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, m.count, " transaction", m.count !== 1 ? "s" : "", " \xB7 avg ", fmt(m.avgAmount))),
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: selected ? "#a78bfa" : "#94a3b8" } }, fmt(pendingTxnAmount != null && selected ? pendingTxnAmount : m.avgAmount))
+      ), selected && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "#0a0b0f", borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6 } }, "Choose amount \u2014 pick a specific transaction or use the average"), /* @__PURE__ */ React.createElement("div", { style: { maxHeight: 140, overflowY: "auto", border: "1px solid #1c1f2e", borderRadius: 6, marginBottom: 10 } }, /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          onClick: () => setPendingTxnAmount(null),
+          style: {
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "7px 10px",
+            cursor: "pointer",
+            background: pendingTxnAmount === null ? "#a78bfa15" : "transparent",
+            borderBottom: "1px solid #1c1f2e"
+          }
+        },
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: pendingTxnAmount === null ? "#a78bfa" : "#94a3b8" } }, "Average across all transactions"),
+        /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: pendingTxnAmount === null ? "#a78bfa" : "#94a3b8" } }, fmt(m.avgAmount))
+      ), (allTransactions || []).filter((t) => t.amount < 0 && !subTxnIds.has(t.id) && merchantKey(t.description || "") === m.key).sort((a, b) => b.date > a.date ? 1 : -1).map((t) => {
+        const amt = Math.abs(t.amount);
+        const isSelected = pendingTxnAmount === amt && pendingTxnAmount !== null;
+        return /* @__PURE__ */ React.createElement(
+          "div",
+          {
+            key: t.id,
+            onClick: () => setPendingTxnAmount(amt),
+            style: {
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "7px 10px",
+              cursor: "pointer",
+              background: isSelected ? "#a78bfa15" : "transparent",
+              borderBottom: "1px solid #1c1f2e"
+            }
+          },
+          /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: isSelected ? "#a78bfa" : "#94a3b8" } }, t.description || m.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563" } }, t.date)),
+          /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: isSelected ? "#a78bfa" : "#94a3b8" } }, fmt(amt))
+        );
+      })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginBottom: 6 } }, "Frequency"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, ["Weekly", "Monthly", "Quarterly", "Yearly"].map((f) => /* @__PURE__ */ React.createElement(
         "button",
         {
           key: f,
@@ -2321,11 +2360,13 @@ root.render(React.createElement(App));
         },
         f
       ))), /* @__PURE__ */ React.createElement("button", { onClick: () => {
-        setPinnedSubs((prev) => [...prev, { name: m.name, amount: parseFloat(m.avgAmount.toFixed(2)), frequency: pendingFreq }]);
+        const amount = pendingTxnAmount != null ? pendingTxnAmount : parseFloat(m.avgAmount.toFixed(2));
+        setPinnedSubs((prev) => [...prev, { name: m.name, amount, frequency: pendingFreq }]);
         setAddSubOpen(false);
         setPendingSub(null);
         setSubSearch("");
-      }, style: { width: "100%", background: "#a78bfa", border: "none", borderRadius: 6, color: "#0a0b0f", fontWeight: 700, fontSize: 13, padding: "8px", cursor: "pointer", fontFamily: "inherit" } }, "Pin as subscription")));
+        setPendingTxnAmount(null);
+      }, style: { width: "100%", background: "#a78bfa", border: "none", borderRadius: 6, color: "#0a0b0f", fontWeight: 700, fontSize: 13, padding: "8px", cursor: "pointer", fontFamily: "inherit" } }, "Pin as subscription \u2014 ", fmt(pendingTxnAmount != null ? pendingTxnAmount : m.avgAmount))));
     }), pickerMerchants.filter((m) => !subSearch || m.name.toLowerCase().includes(subSearch.toLowerCase())).length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "16px", fontSize: 12, color: "#4b5563", textAlign: "center" } }, "No unassigned merchants found")), /* @__PURE__ */ React.createElement("button", { onClick: () => {
       setAddSubOpen(false);
       setPendingSub(null);

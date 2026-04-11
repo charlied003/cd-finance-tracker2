@@ -1948,6 +1948,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
   const [subSearch, setSubSearch]               = useState("");
   const [pendingSub, setPendingSub]             = useState(null); // {name, avgAmount}
   const [pendingFreq, setPendingFreq]           = useState("Monthly");
+  const [pendingTxnAmount, setPendingTxnAmount] = useState(null); // override amount from specific txn
 
   // IDs of transactions that are subscription payments — excluded from spending breakdown
   const subTxnIds = computeSubTxnIds(allTransactions, pinnedSubs);
@@ -2061,17 +2062,48 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                   const selected = pendingSub?.key === m.key;
                   return (
                     <div key={m.key}>
-                      <div onClick={()=>{setPendingSub(selected?null:m);setPendingFreq("Monthly");}}
+                      <div onClick={()=>{setPendingSub(selected?null:m);setPendingFreq("Monthly");setPendingTxnAmount(null);}}
                         style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",cursor:"pointer",
                           background:selected?"#a78bfa15":"transparent",borderBottom:"1px solid #1c1f2e"}}>
                         <div>
                           <div style={{fontSize:13,fontWeight:700,color:selected?"#a78bfa":"#e2e4ec"}}>{m.name}</div>
-                          <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{m.count} transaction{m.count!==1?"s":""}</div>
+                          <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{m.count} transaction{m.count!==1?"s":""} · avg {fmt(m.avgAmount)}</div>
                         </div>
-                        <span style={{fontSize:13,fontWeight:700,color:selected?"#a78bfa":"#94a3b8"}}>{fmt(m.avgAmount)}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:selected?"#a78bfa":"#94a3b8"}}>{fmt(pendingTxnAmount != null && selected ? pendingTxnAmount : m.avgAmount)}</span>
                       </div>
                       {selected&&(
                         <div style={{padding:"10px 12px",background:"#0a0b0f",borderBottom:"1px solid #1c1f2e"}}>
+                          {/* Individual transaction picker */}
+                          <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Choose amount — pick a specific transaction or use the average</div>
+                          <div style={{maxHeight:140,overflowY:"auto",border:"1px solid #1c1f2e",borderRadius:6,marginBottom:10}}>
+                            {/* "Use average" option */}
+                            <div onClick={()=>setPendingTxnAmount(null)}
+                              style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",cursor:"pointer",
+                                background:pendingTxnAmount===null?"#a78bfa15":"transparent",borderBottom:"1px solid #1c1f2e"}}>
+                              <span style={{fontSize:11,color:pendingTxnAmount===null?"#a78bfa":"#94a3b8"}}>Average across all transactions</span>
+                              <span style={{fontSize:11,fontWeight:700,color:pendingTxnAmount===null?"#a78bfa":"#94a3b8"}}>{fmt(m.avgAmount)}</span>
+                            </div>
+                            {/* Individual transactions */}
+                            {(allTransactions||[])
+                              .filter(t => t.amount < 0 && !subTxnIds.has(t.id) && merchantKey(t.description||"")=== m.key)
+                              .sort((a,b) => b.date > a.date ? 1 : -1)
+                              .map(t => {
+                                const amt = Math.abs(t.amount);
+                                const isSelected = pendingTxnAmount === amt && pendingTxnAmount !== null;
+                                return (
+                                  <div key={t.id} onClick={()=>setPendingTxnAmount(amt)}
+                                    style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",cursor:"pointer",
+                                      background:isSelected?"#a78bfa15":"transparent",borderBottom:"1px solid #1c1f2e"}}>
+                                    <div>
+                                      <div style={{fontSize:11,color:isSelected?"#a78bfa":"#94a3b8"}}>{t.description||m.name}</div>
+                                      <div style={{fontSize:10,color:"#4b5563"}}>{t.date}</div>
+                                    </div>
+                                    <span style={{fontSize:11,fontWeight:700,color:isSelected?"#a78bfa":"#94a3b8"}}>{fmt(amt)}</span>
+                                  </div>
+                                );
+                              })
+                            }
+                          </div>
                           <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Frequency</div>
                           <div style={{display:"flex",gap:6,marginBottom:10}}>
                             {["Weekly","Monthly","Quarterly","Yearly"].map(f=>(
@@ -2083,10 +2115,11 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                             ))}
                           </div>
                           <button onClick={()=>{
-                            setPinnedSubs(prev=>[...prev,{name:m.name,amount:parseFloat(m.avgAmount.toFixed(2)),frequency:pendingFreq}]);
-                            setAddSubOpen(false);setPendingSub(null);setSubSearch("");
+                            const amount = pendingTxnAmount != null ? pendingTxnAmount : parseFloat(m.avgAmount.toFixed(2));
+                            setPinnedSubs(prev=>[...prev,{name:m.name,amount,frequency:pendingFreq}]);
+                            setAddSubOpen(false);setPendingSub(null);setSubSearch("");setPendingTxnAmount(null);
                           }} style={{width:"100%",background:"#a78bfa",border:"none",borderRadius:6,color:"#0a0b0f",fontWeight:700,fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>
-                            Pin as subscription
+                            Pin as subscription — {fmt(pendingTxnAmount != null ? pendingTxnAmount : m.avgAmount)}
                           </button>
                         </div>
                       )}
