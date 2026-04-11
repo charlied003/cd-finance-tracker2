@@ -469,6 +469,10 @@ function starlingToInternal(item, idx) {
   } else if (/capital one/i.test(item.counterPartyName || "")) {
     nativeTransferType = "creditcard";
   }
+  // Correct category direction for savings: API gives "Savings" for both in and out
+  const resolvedCat = nativeTransferType === "savings"
+    ? (amount > 0 ? "SavingsReturn" : "Savings")
+    : cat;
   return {
     id: item.feedItemUid,
     rowIndex: idx,
@@ -477,8 +481,8 @@ function starlingToInternal(item, idx) {
     description: item.counterPartyName || item.reference || "",
     amount,
     balance: null,
-    category: cat,
-    nativeCategory: cat,
+    category: resolvedCat,
+    nativeCategory: resolvedCat,
     nativeTransferType,
   };
 }

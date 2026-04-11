@@ -587,6 +587,7 @@ amount = price per single item.` }
     } else if (/capital one/i.test(item.counterPartyName || "")) {
       nativeTransferType = "creditcard";
     }
+    const resolvedCat = nativeTransferType === "savings" ? amount > 0 ? "SavingsReturn" : "Savings" : cat;
     return {
       id: item.feedItemUid,
       rowIndex: idx,
@@ -595,8 +596,8 @@ amount = price per single item.` }
       description: item.counterPartyName || item.reference || "",
       amount,
       balance: null,
-      category: cat,
-      nativeCategory: cat,
+      category: resolvedCat,
+      nativeCategory: resolvedCat,
       nativeTransferType
     };
   }
