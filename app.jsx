@@ -1993,115 +1993,167 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 // ─── Settings Modal ───────────────────────────────────────────────────────────
 function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady}) {
   const credImportRef = useRef();
-  const [val,setVal]=useState(cycleStart);
-  const [keyInput,setKeyInput]=useState(apiKey||"");
-  const [keyVisible,setKeyVisible]=useState(false);
-  const [gistInput,setGistInput]=useState(gistToken||"");
-  const [gistVisible,setGistVisible]=useState(false);
-  const [starlingInput,setStarlingInput]=useState(starlingToken||"");
-  const [starlingVisible,setStarlingVisible]=useState(false);
-  const [proxyInput,setProxyInput]=useState(starlingProxy||"");
-  const hasMonzoCfg = monzoCfgReady;
-  const days=Array.from({length:28},(_,i)=>i+1);
-  const endDay=val===1?31:val-1;
+  const [val,setVal]                   = useState(cycleStart);
+  const [keyInput,setKeyInput]         = useState(apiKey||"");
+  const [gistInput,setGistInput]       = useState(gistToken||"");
+  const [starlingInput,setStarlingInput] = useState(starlingToken||"");
+  const [proxyInput,setProxyInput]     = useState(starlingProxy||"");
+  const [showStarlingCfg,setShowStarlingCfg] = useState(false);
+  const [showGistCfg,setShowGistCfg]   = useState(false);
+  const [showApiCfg,setShowApiCfg]     = useState(false);
+
+  const starlingOk   = Boolean(starlingToken && starlingProxy);
+  const monzoOk      = monzoCfgReady && monzoStatus === "connected";
+  const days         = Array.from({length:28},(_,i)=>i+1);
+  const endDay       = val===1?31:val-1;
+
+  const Chip = ({ok,label}) => (
+    <span style={{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:10,
+      background:ok?"#4ade8020":"#f8717120",color:ok?"#4ade80":"#f87171",border:`1px solid ${ok?"#4ade8040":"#f8717140"}`}}>
+      {ok?"✓ "+label:"✗ "+label}
+    </span>
+  );
+
+  const Row = ({label,children,border=true}) => (
+    <div style={{marginBottom:16,paddingBottom:16,...(border?{borderBottom:"1px solid #1c1f2e"}:{})}}>
+      {label&&<div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:10,fontWeight:700}}>{label}</div>}
+      {children}
+    </div>
+  );
+
+  const CfgToggle = ({open,onToggle}) => (
+    <button onClick={onToggle} style={{background:"none",border:"none",color:"#4b5563",fontSize:11,cursor:"pointer",padding:0,letterSpacing:1}}>
+      {open?"▲ hide":"⚙ configure"}
+    </button>
+  );
+
+  const SaveBtn = ({onClick,active,color="#60a5fa",label}) => (
+    <button onClick={onClick} style={{width:"100%",background:active?color+"20":"#1c1f2e",border:`1px solid ${active?color+"60":"#2a2d3a"}`,color:active?color:"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:active?"pointer":"default",letterSpacing:1,marginTop:8}}>{label}</button>
+  );
+
   return (
     <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:100,display:"flex",alignItems:"flex-end"}}>
-      <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:"16px 16px 0 0",width:"100%",maxHeight:"85vh",overflowY:"auto",padding:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:"16px 16px 0 0",width:"100%",maxHeight:"88vh",overflowY:"auto",padding:20}}>
+
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
           <div style={{fontSize:14,fontWeight:700,letterSpacing:1}}>SETTINGS</div>
           <button onClick={onClose} style={{background:"none",border:"none",color:"#4b5563",fontSize:20,cursor:"pointer"}}>✕</button>
         </div>
-        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
-          <div style={{fontSize:10,color:"#fbbf24",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>ANTHROPIC API KEY</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Optional — for AI auto-categorisation. Get one at platform.anthropic.com → API Keys.</div>
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            <input type={keyVisible?"text":"password"} value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="sk-ant-..." style={{flex:1,background:"#1c1f2e",border:`1.5px solid ${keyInput?"#fbbf24":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none"}}/>
-            <button onClick={()=>setKeyVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{keyVisible?"Hide":"Show"}</button>
-          </div>
-          <button onClick={()=>onApiKeySave(keyInput.trim())} style={{width:"100%",background:keyInput?"#fbbf24":"#1c1f2e",border:"none",color:keyInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:keyInput?"pointer":"default",letterSpacing:1}}>SAVE KEY</button>
-          {apiKey&&<div style={{fontSize:10,color:"#4ade80",marginTop:6,textAlign:"center"}}>✓ Key saved</div>}
-        </div>
-        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
-          <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>GITHUB SYNC</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>
-            Syncs merchant rules &amp; receipts across devices via a private GitHub Gist.
-            Create a token at <span style={{color:"#94a3b8"}}>github.com → Settings → Developer settings → Personal access tokens</span> with <strong style={{color:"#94a3b8"}}>gist</strong> scope only.
-          </div>
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            <input type={gistVisible?"text":"password"} value={gistInput} onChange={e=>setGistInput(e.target.value)} placeholder="ghp_..." style={{flex:1,background:"#1c1f2e",border:`1.5px solid ${gistInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none"}}/>
-            <button onClick={()=>setGistVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{gistVisible?"Hide":"Show"}</button>
-          </div>
-          <button onClick={()=>onGistTokenSave(gistInput)} style={{width:"100%",background:gistInput?"#60a5fa":"#1c1f2e",border:"none",color:gistInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:gistInput?"pointer":"default",letterSpacing:1}}>SAVE &amp; CONNECT</button>
-          {gistToken&&<div style={{fontSize:10,marginTop:6,textAlign:"center",color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24"}}>
-            {syncStatus==="synced"?"✓ Synced":syncStatus==="error"?"✗ Sync error — check token":"⟳ Syncing..."}
-          </div>}
-        </div>
-        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
-          <div style={{fontSize:10,color:"#4ade80",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>MONZO — GROCERY ACCOUNT</div>
-          {!hasMonzoCfg ? (
-            <div style={{fontSize:11,color:"#4b5563",lineHeight:1.6}}>
-              OAuth not configured. Copy <span style={{color:"#94a3b8"}}>config.js.template</span> to <span style={{color:"#94a3b8"}}>config.js</span>, fill in your Client ID from <span style={{color:"#94a3b8"}}>developers.monzo.com</span>, then rebuild.
-            </div>
-          ) : monzoStatus==="connected" ? (
-            <div>
-              <div style={{fontSize:11,color:"#4ade80",marginBottom:10}}>✓ Connected — tokens stored, auto-refreshing</div>
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={onSyncMonzo} disabled={bankSyncing} style={{flex:2,background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
-                  {bankSyncing?"⟳ SYNCING…":"↓ SYNC MONZO"}
-                </button>
-                <button onClick={onMonzoDisconnect} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#f87171",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>DISCONNECT</button>
-              </div>
-            </div>
-          ) : monzoStatus==="connecting" ? (
-            <div style={{fontSize:11,color:"#fbbf24",textAlign:"center",padding:"10px 0"}}>⟳ Connecting to Monzo...</div>
-          ) : monzoStatus==="expired" ? (
-            <div>
-              <div style={{fontSize:11,color:"#f87171",marginBottom:10}}>Session expired — please reconnect to Monzo.</div>
-              <button onClick={onMonzoConnect} style={{width:"100%",background:"#f8717120",border:"1px solid #f8717160",color:"#f87171",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>RECONNECT MONZO</button>
-            </div>
-          ) : (
-            <div>
-              <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Connect via OAuth — you'll be redirected to Monzo to log in, then sent back here automatically.</div>
-              <button onClick={onMonzoConnect} style={{width:"100%",background:"#4ade80",border:"none",color:"#0a0b0f",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>CONNECT MONZO</button>
-            </div>
-          )}
-        </div>
-        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
-          <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>STARLING — MAIN ACCOUNT</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Personal access token from <span style={{color:"#94a3b8"}}>developer.starlingbank.com</span>.</div>
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            <input type={starlingVisible?"text":"password"} value={starlingInput} onChange={e=>setStarlingInput(e.target.value)} placeholder="eyJ..." style={{flex:1,background:"#1c1f2e",border:`1.5px solid ${starlingInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none"}}/>
-            <button onClick={()=>setStarlingVisible(v=>!v)} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#6b7280",borderRadius:7,padding:"0 12px",fontSize:12,cursor:"pointer"}}>{starlingVisible?"Hide":"Show"}</button>
-          </div>
-          <button onClick={()=>onStarlingTokenSave(starlingInput)} style={{width:"100%",background:starlingInput?"#60a5fa":"#1c1f2e",border:"none",color:starlingInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:starlingInput?"pointer":"default",letterSpacing:1,marginBottom:8}}>SAVE TOKEN</button>
-          <div style={{fontSize:10,color:"#60a5fa",letterSpacing:2,textTransform:"uppercase",marginBottom:6,marginTop:4}}>CLOUDFLARE PROXY URL</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:8,lineHeight:1.6}}>Required for Starling sync. Deploy <span style={{color:"#94a3b8"}}>worker.js</span> to Cloudflare Workers and paste the URL here (e.g. <span style={{color:"#94a3b8"}}>https://cd-finance-starling-proxy.workers.dev</span>).</div>
-          <input value={proxyInput} onChange={e=>setProxyInput(e.target.value)} placeholder="https://....workers.dev" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${proxyInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",marginBottom:8,boxSizing:"border-box"}}/>
-          <button onClick={()=>onStarlingProxySave(proxyInput)} style={{width:"100%",background:proxyInput?"#60a5fa":"#1c1f2e",border:"none",color:proxyInput?"#0a0b0f":"#4b5563",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:proxyInput?"pointer":"default",letterSpacing:1}}>SAVE PROXY URL</button>
-          {starlingToken&&starlingProxy&&(
-            <button onClick={onSyncStarling} disabled={bankSyncing} style={{width:"100%",marginTop:8,background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
-              {bankSyncing?"⟳ SYNCING…":"↓ SYNC STARLING"}
-            </button>
-          )}
-          {starlingToken&&!starlingProxy&&<div style={{fontSize:10,color:"#fbbf24",marginTop:6,textAlign:"center"}}>⚠ Token saved but proxy URL needed for sync</div>}
-        </div>
-        <div style={{marginBottom:20,paddingBottom:20,borderBottom:"1px solid #1c1f2e"}}>
-          <div style={{fontSize:10,color:"#94a3b8",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>CREDENTIALS FILE</div>
-          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Export all your tokens to a JSON file. Upload it on another device to restore everything instantly — no re-entering tokens.</div>
+
+        {/* ── Credentials File — top because it's the most common action on a new device ── */}
+        <Row label="Credentials File">
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:10,lineHeight:1.6}}>Transfer all tokens to a new device instantly.</div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={onExportCredentials} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↓ EXPORT</button>
-            <button onClick={()=>credImportRef.current?.click()} style={{flex:1,background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:7,padding:"9px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↑ IMPORT</button>
+            <button onClick={onExportCredentials} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3a",color:"#94a3b8",borderRadius:7,padding:"10px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↓ EXPORT</button>
+            <button onClick={()=>credImportRef.current?.click()} style={{flex:1,background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:7,padding:"10px",fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1}}>↑ IMPORT</button>
           </div>
           <input ref={credImportRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={onImportCredentials}/>
-        </div>
-        <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>PAY CYCLE</div>
-        <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
-          {days.map(d=>(
-            <button key={d} onClick={()=>setVal(d)} style={{width:44,height:36,background:val===d?"#60a5fa":"#1c1f2e",color:val===d?"#0a0b0f":"#6b7280",border:`1px solid ${val===d?"#60a5fa":"#2a2d3a"}`,borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>{d}</button>
-          ))}
-        </div>
-        <button onClick={()=>onSave(val)} style={{width:"100%",background:"#4ade80",border:"none",color:"#0a0b0f",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:"pointer",letterSpacing:1}}>SAVE — {ordinal(val)} TO {ordinal(endDay)}</button>
+        </Row>
+
+        {/* ── Bank Sync — second most common action ── */}
+        <Row label="Bank Sync">
+          {/* Starling */}
+          <div style={{background:"#0a0b0f",border:"1px solid #1c1f2e",borderRadius:8,padding:"12px 14px",marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:starlingOk||showStarlingCfg?8:0}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:"#60a5fa",marginBottom:4}}>Starling</div>
+                <Chip ok={starlingOk} label={starlingOk?"Ready":"Not configured"}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {starlingOk&&<button onClick={onSyncStarling} disabled={bankSyncing} style={{background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
+                  {bankSyncing?"⟳":"↓ SYNC"}
+                </button>}
+                <CfgToggle open={showStarlingCfg} onToggle={()=>setShowStarlingCfg(v=>!v)}/>
+              </div>
+            </div>
+            {showStarlingCfg&&(
+              <div style={{borderTop:"1px solid #1c1f2e",paddingTop:12,marginTop:4}}>
+                <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>Personal access token from developer.starlingbank.com</div>
+                <input type="password" value={starlingInput} onChange={e=>setStarlingInput(e.target.value)} placeholder="eyJ..." style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${starlingInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+                <SaveBtn onClick={()=>onStarlingTokenSave(starlingInput)} active={Boolean(starlingInput)} label="SAVE TOKEN"/>
+                <div style={{fontSize:10,color:"#4b5563",marginTop:12,marginBottom:6,lineHeight:1.5}}>Cloudflare proxy URL (deploy worker.js)</div>
+                <input value={proxyInput} onChange={e=>setProxyInput(e.target.value)} placeholder="https://....workers.dev" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${proxyInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+                <SaveBtn onClick={()=>onStarlingProxySave(proxyInput)} active={Boolean(proxyInput)} label="SAVE PROXY URL"/>
+              </div>
+            )}
+          </div>
+
+          {/* Monzo */}
+          <div style={{background:"#0a0b0f",border:"1px solid #1c1f2e",borderRadius:8,padding:"12px 14px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:"#4ade80",marginBottom:4}}>Monzo</div>
+                <Chip ok={monzoOk} label={
+                  !monzoCfgReady?"Not configured":
+                  monzoStatus==="connecting"?"Connecting...":
+                  monzoStatus==="connected"?"Connected":
+                  monzoStatus==="expired"?"Session expired":"Disconnected"
+                }/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {monzoOk&&<button onClick={onSyncMonzo} disabled={bankSyncing} style={{background:bankSyncing?"#1c1f2e":"#4ade8015",border:`1px solid ${bankSyncing?"#2a2d3a":"#4ade8040"}`,color:bankSyncing?"#4b5563":"#4ade80",borderRadius:7,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:bankSyncing?"default":"pointer",letterSpacing:1}}>
+                  {bankSyncing?"⟳":"↓ SYNC"}
+                </button>}
+                {monzoCfgReady && monzoStatus==="connected" && (
+                  <button onClick={onMonzoDisconnect} style={{background:"none",border:"none",color:"#f87171",fontSize:11,cursor:"pointer",padding:0,letterSpacing:1}}>disconnect</button>
+                )}
+                {monzoCfgReady && monzoStatus!=="connected" && monzoStatus!=="connecting" && (
+                  <button onClick={onMonzoConnect} style={{background:"#4ade8015",border:"1px solid #4ade8040",color:"#4ade80",borderRadius:7,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:"pointer",letterSpacing:1}}>CONNECT</button>
+                )}
+                {monzoStatus==="connecting"&&<span style={{fontSize:11,color:"#fbbf24"}}>⟳</span>}
+              </div>
+            </div>
+            {!monzoCfgReady&&<div style={{fontSize:10,color:"#4b5563",marginTop:8,lineHeight:1.5}}>Import credentials or rebuild with config.js to enable Monzo OAuth.</div>}
+          </div>
+        </Row>
+
+        {/* ── GitHub Sync ── */}
+        <Row label="GitHub Sync">
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <Chip ok={Boolean(gistToken)} label={gistToken?"Connected":"Not configured"}/>
+              {gistToken&&<span style={{fontSize:10,marginLeft:8,color:syncStatus==="synced"?"#4ade80":syncStatus==="error"?"#f87171":"#fbbf24"}}>
+                {syncStatus==="synced"?"✓ Synced":syncStatus==="error"?"✗ Error":"⟳ Syncing..."}
+              </span>}
+            </div>
+            <CfgToggle open={showGistCfg} onToggle={()=>setShowGistCfg(v=>!v)}/>
+          </div>
+          {showGistCfg&&(
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>GitHub Personal Access Token with <strong>gist</strong> scope — syncs rules, receipts &amp; subscriptions across devices.</div>
+              <input type="password" value={gistInput} onChange={e=>setGistInput(e.target.value)} placeholder="ghp_..." style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gistInput?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+              <SaveBtn onClick={()=>onGistTokenSave(gistInput)} active={Boolean(gistInput)} label="SAVE & CONNECT"/>
+            </div>
+          )}
+        </Row>
+
+        {/* ── Anthropic AI ── */}
+        <Row label="AI (Anthropic)">
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <Chip ok={Boolean(apiKey)} label={apiKey?"Key saved":"Not configured"}/>
+            <CfgToggle open={showApiCfg} onToggle={()=>setShowApiCfg(v=>!v)}/>
+          </div>
+          {showApiCfg&&(
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>Anthropic API key for AI categorisation &amp; receipt scanning. platform.anthropic.com → API Keys.</div>
+              <input type="password" value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="sk-ant-..." style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${keyInput?"#fbbf24":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+              <SaveBtn onClick={()=>onApiKeySave(keyInput.trim())} active={Boolean(keyInput)} color="#fbbf24" label="SAVE KEY"/>
+            </div>
+          )}
+        </Row>
+
+        {/* ── Pay Cycle ── */}
+        <Row label="Pay Cycle" border={false}>
+          <div style={{fontSize:11,color:"#4b5563",marginBottom:12,lineHeight:1.6}}>Period runs from the <strong style={{color:"#94a3b8"}}>{ordinal(val)}</strong> to the <strong style={{color:"#94a3b8"}}>{ordinal(endDay)}</strong> of the following month.</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+            {days.map(d=>(
+              <button key={d} onClick={()=>setVal(d)} style={{width:44,height:36,background:val===d?"#60a5fa":"#1c1f2e",color:val===d?"#0a0b0f":"#6b7280",border:`1px solid ${val===d?"#60a5fa":"#2a2d3a"}`,borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>{d}</button>
+            ))}
+          </div>
+          <button onClick={()=>onSave(val)} style={{width:"100%",background:"#4ade80",border:"none",color:"#0a0b0f",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:"pointer",letterSpacing:1}}>SAVE — {ordinal(val)} TO {ordinal(endDay)}</button>
+        </Row>
+
       </div>
     </div>
   );
