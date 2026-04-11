@@ -19,6 +19,25 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // Google OAuth token proxy — allows browser-side PKCE token exchange (CORS bypass)
+    if (url.pathname === "/google-token") {
+      if (request.method !== "POST") {
+        return new Response(JSON.stringify({ error: "POST only" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
+      }
+      let upstream;
+      try {
+        upstream = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: await request.text(),
+        });
+      } catch(e) {
+        return new Response(JSON.stringify({ error: `Google token fetch failed: ${e.message}` }), { status: 502, headers: { ...CORS, "Content-Type": "application/json" } });
+      }
+      return new Response(await upstream.text(), { status: upstream.status, headers: { ...CORS, "Content-Type": "application/json" } });
+    }
+
     const starlingUrl = STARLING_BASE + url.pathname + url.search;
 
     const auth = request.headers.get("Authorization");

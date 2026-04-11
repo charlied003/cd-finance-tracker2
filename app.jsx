@@ -307,6 +307,14 @@ const MONZO_EXPIRY_KEY    = "finance-tracker-monzo-expiry";
 const MONZO_STATE_KEY     = "finance-tracker-monzo-state";
 const MONZO_VERIFIER_KEY  = "finance-tracker-monzo-verifier";
 
+// Gmail OAuth
+const GMAIL_ACCESS_KEY    = "finance-tracker-gmail-access";
+const GMAIL_REFRESH_KEY   = "finance-tracker-gmail-refresh";
+const GMAIL_EXPIRY_KEY    = "finance-tracker-gmail-expiry";
+const GMAIL_CLIENT_KEY    = "finance-tracker-gmail-client";
+const GMAIL_VERIFIER_KEY  = "finance-tracker-gmail-verifier";
+const GMAIL_PROCESSED_KEY = "finance-tracker-gmail-processed";
+
 // PKCE helpers
 function pkceVerifier() {
   const arr = new Uint8Array(32);
@@ -487,6 +495,115 @@ function starlingToInternal(item, idx) {
   };
 }
 
+// ─── Gmail OAuth & API ───────────────────────────────────────────────────────
+
+function gmailCfg() { try { return JSON.parse(localStorage.getItem(GMAIL_CLIENT_KEY)||"null"); } catch { return null; } }
+function gmailSaveCfg(cfg) { localStorage.setItem(GMAIL_CLIENT_KEY, JSON.stringify(cfg)); }
+function gmailTokens() { return { access: localStorage.getItem(GMAIL_ACCESS_KEY), refresh: localStorage.getItem(GMAIL_REFRESH_KEY), expiry: parseInt(localStorage.getItem(GMAIL_EXPIRY_KEY)||"0") }; }
+function gmailSaveTokens({ access_token, refresh_token, expires_in }) {
+  localStorage.setItem(GMAIL_ACCESS_KEY, access_token);
+  if (refresh_token) localStorage.setItem(GMAIL_REFRESH_KEY, refresh_token);
+  localStorage.setItem(GMAIL_EXPIRY_KEY, String(Date.now() + (expires_in||3600)*1000));
+}
+function gmailClearTokens() { [GMAIL_ACCESS_KEY, GMAIL_REFRESH_KEY, GMAIL_EXPIRY_KEY].forEach(k => localStorage.removeItem(k)); }
+
+async function gmailExchangeCode(code, verifier, proxyBase) {
+  const cfg = gmailCfg(); if (!cfg) throw new Error("Gmail config missing");
+  localStorage.removeItem(GMAIL_VERIFIER_KEY);
+  const res = await fetch(`${proxyBase}/google-token`, {
+    method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body: new URLSearchParams({ grant_type:"authorization_code", client_id:cfg.clientId, client_secret:cfg.clientSecret, redirect_uri:cfg.redirectUri, code, code_verifier:verifier }),
+  });
+  if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.error_description||e.error||`Exchange failed (${res.status})`); }
+  return res.json();
+}
+
+async function gmailDoRefresh(proxyBase) {
+  const cfg = gmailCfg(); const { refresh } = gmailTokens();
+  if (!cfg||!refresh) throw new Error("GMAIL_REFRESH_FAILED");
+  const res = await fetch(`${proxyBase}/google-token`, {
+    method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body: new URLSearchParams({ grant_type:"refresh_token", client_id:cfg.clientId, client_secret:cfg.clientSecret, refresh_token:refresh }),
+  });
+  if (!res.ok) throw new Error("GMAIL_REFRESH_FAILED");
+  return res.json();
+}
+
+async function gmailGetValidToken(proxyBase) {
+  const { access, expiry } = gmailTokens();
+  if (!access) throw new Error("GMAIL_NOT_CONNECTED");
+  if (Date.now() > expiry - 5*60*1000) {
+    try { const t = await gmailDoRefresh(proxyBase); gmailSaveTokens(t); return t.access_token; }
+    catch { gmailClearTokens(); throw new Error("GMAIL_REFRESH_FAILED"); }
+  }
+  return access;
+}
+
+async function gmailStartAuth(cfg) {
+  gmailSaveCfg(cfg);
+  const verifier  = pkceVerifier();
+  const challenge = await pkceChallenge(verifier);
+  localStorage.setItem(GMAIL_VERIFIER_KEY, verifier);
+  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
+    client_id:cfg.clientId, redirect_uri:cfg.redirectUri, response_type:"code",
+    scope:"https://www.googleapis.com/auth/gmail.readonly",
+    code_challenge:challenge, code_challenge_method:"S256",
+    access_type:"offline", prompt:"consent",
+  })}`;
+}
+
+async function gmailFindLabel(token, labelName) {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/labels", { headers:{Authorization:`Bearer ${token}`} });
+  if (!res.ok) throw new Error(`Labels fetch failed (${res.status})`);
+  const data = await res.json();
+  return (data.labels||[]).find(l => l.name.toLowerCase()===labelName.toLowerCase()) || null;
+}
+
+async function gmailListMessages(token, labelId, maxResults=50) {
+  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({labelIds:labelId,maxResults})}`, { headers:{Authorization:`Bearer ${token}`} });
+  if (!res.ok) throw new Error(`Messages fetch failed (${res.status})`);
+  return (await res.json()).messages || [];
+}
+
+async function gmailGetMessage(token, msgId) {
+  const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`, { headers:{Authorization:`Bearer ${token}`} });
+  if (!res.ok) throw new Error(`Message fetch failed (${res.status})`);
+  return res.json();
+}
+
+function gmailDecodeBody(payload) {
+  if (!payload) return "";
+  if (payload.body?.data) { try { return atob(payload.body.data.replace(/-/g,"+").replace(/_/g,"/")); } catch { return ""; } }
+  if (payload.parts) {
+    const plain = payload.parts.find(p => p.mimeType==="text/plain");
+    if (plain) { const t=gmailDecodeBody(plain); if(t) return t; }
+    for (const p of payload.parts) { const t=gmailDecodeBody(p); if(t) return t; }
+  }
+  return "";
+}
+
+async function extractOrderFromEmail(subject, from, body, apiKey) {
+  const clean = body.replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/\s+/g," ").slice(0,5000);
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{"x-api-key":apiKey,"anthropic-version":"2023-06-01","content-type":"application/json"},
+    body: JSON.stringify({
+      model:"claude-haiku-4-5-20251001", max_tokens:1024,
+      messages:[{role:"user",content:`Extract order details from this email. Return JSON only:
+{"storeName":"...","orderDate":"YYYY-MM-DD","orderTotal":12.34,"items":[{"name":"item name","qty":1,"amount":12.34}]}
+Return the literal word null if this is not an order or receipt confirmation.
+From: ${from}
+Subject: ${subject}
+---
+${clean}`}],
+    }),
+  });
+  const data = await res.json();
+  const text = (data.content?.[0]?.text||"").trim();
+  if (text==="null"||!text) return null;
+  try { const m=text.match(/\{[\s\S]*\}/); return m?JSON.parse(m[0]):null; } catch { return null; }
+}
+
 // ─── GitHub Gist Sync ────────────────────────────────────────────────────────
 const GIST_FILE      = "finance-tracker-sync.json";
 const GIST_TOKEN_KEY = "finance-tracker-gist-token";
@@ -564,6 +681,9 @@ export default function App() {
   const [starlingToken, setStarlingToken]   = useState("");
   const [starlingProxy, setStarlingProxy]   = useState("");
   const [bankSyncing, setBankSyncing]       = useState(false);
+  const [gmailStatus, setGmailStatus]       = useState("disconnected"); // disconnected|connecting|connected
+  const [gmailSyncing, setGmailSyncing]     = useState(false);
+  const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
     try {
       const saved = localStorage.getItem(DEV_SERVICES_KEY);
@@ -615,10 +735,31 @@ const DEFAULT_RULES = {
         if (s.receipts)       setReceipts(s.receipts);
         if (s.pinnedSubs)     setPinnedSubs(s.pinnedSubs);
       }
-      // Handle Monzo OAuth redirect (code + state in URL after user approves)
-      const urlParams = new URLSearchParams(window.location.search);
+      // Handle OAuth redirects — check which verifier is present to distinguish Monzo vs Gmail
+      const urlParams  = new URLSearchParams(window.location.search);
       const oauthCode  = urlParams.get("code");
       const oauthState = urlParams.get("state");
+      const gmailVerifier = localStorage.getItem(GMAIL_VERIFIER_KEY);
+
+      if (oauthCode && gmailVerifier) {
+        // Gmail callback
+        window.history.replaceState({}, "", window.location.pathname);
+        setGmailStatus("connecting");
+        const proxyBase = localStorage.getItem(STARLING_PROXY_KEY) || "";
+        try {
+          const tokens = await gmailExchangeCode(oauthCode, gmailVerifier, proxyBase);
+          gmailSaveTokens(tokens);
+          setGmailStatus("connected");
+          showToast("Gmail connected — receipts label ready to scan");
+        } catch(e) {
+          gmailClearTokens();
+          setGmailStatus("disconnected");
+          showToast(`Gmail connection failed: ${e.message}`, "error");
+        }
+      } else if (localStorage.getItem(GMAIL_ACCESS_KEY)) {
+        setGmailStatus("connected");
+      }
+
       if (oauthCode && localStorage.getItem(MONZO_VERIFIER_KEY)) {
         window.history.replaceState({}, "", window.location.pathname);
         localStorage.removeItem(MONZO_STATE_KEY);
@@ -674,7 +815,7 @@ const DEFAULT_RULES = {
     const data = JSON.stringify({accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts, pinnedSubs});
     try { localStorage.setItem(STORAGE_KEY, data); } catch {}
     if (window.storage) window.storage.set(STORAGE_KEY, data).catch(()=>{});
-  }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey]);
+  }, [accounts, transactions, activeAccounts, cycleStart, manualBalances, merchantRules, apiKey, receipts, pinnedSubs]);
 
   // Debounced Gist sync — fires 2s after any change to syncable data
   useEffect(() => {
@@ -1007,6 +1148,63 @@ root.render(React.createElement(App));
     try { await monzoStartAuth(); } catch(e) { showToast(e.message, "error"); }
   }
 
+  async function connectGmail() {
+    const cfg = gmailCfg();
+    if (!cfg?.clientId || !cfg?.clientSecret) { showToast("Enter Gmail Client ID and Secret in Settings first", "error"); return; }
+    try { await gmailStartAuth(cfg); } catch(e) { showToast(e.message, "error"); }
+  }
+
+  async function scanGmailEmails() {
+    if (!apiKey) { showToast("Anthropic API key required for Gmail scan — set in Settings", "error"); return; }
+    setGmailSyncing(true);
+    try {
+      const token = await gmailGetValidToken(starlingProxy);
+      const label = await gmailFindLabel(token, "receipts");
+      if (!label) { showToast("Gmail label 'receipts' not found — check it exists", "error"); setGmailSyncing(false); return; }
+
+      const processed = new Set(JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY)||"[]"));
+      const messages  = await gmailListMessages(token, label.id, 50);
+      const newMsgs   = messages.filter(m => !processed.has(m.id));
+
+      if (!newMsgs.length) { showToast("No new emails in receipts label"); setGmailSyncing(false); return; }
+
+      showToast(`Scanning ${Math.min(newMsgs.length,20)} email${newMsgs.length===1?"":"s"}…`);
+      const orders = [];
+      for (const msg of newMsgs.slice(0,20)) {
+        const full    = await gmailGetMessage(token, msg.id);
+        const hdrs    = full.payload?.headers || [];
+        const subject = hdrs.find(h=>h.name==="Subject")?.value || "";
+        const from    = hdrs.find(h=>h.name==="From")?.value || "";
+        const body    = gmailDecodeBody(full.payload);
+        const order   = await extractOrderFromEmail(subject, from, body, apiKey);
+        if (order) {
+          // Match by amount proximity + date proximity (within 5 days)
+          const oDate = new Date(order.orderDate || todayStr());
+          const matched = [...transactions]
+            .filter(t => t.amount < 0)
+            .map(t => {
+              const days   = Math.abs((new Date(t.date) - oDate) / 86400000);
+              const amtPct = order.orderTotal ? Math.abs(Math.abs(t.amount) - order.orderTotal) / order.orderTotal : 1;
+              return { t, score: days * 0.3 + amtPct * 10 };
+            })
+            .filter(x => x.score < 6)
+            .sort((a,b) => a.score - b.score)[0]?.t || null;
+          orders.push({ order, matchedTxn: matched, msgId: msg.id });
+        } else {
+          processed.add(msg.id); // not an order — mark so we skip next time
+        }
+      }
+      // Save processed non-orders
+      localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+
+      if (!orders.length) { showToast("No order confirmations found in new emails"); }
+      else { setGmailModal({ orders, processed }); }
+    } catch(e) {
+      showToast(`Gmail scan failed: ${e.message}`, "error");
+    }
+    setGmailSyncing(false);
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div style={{minHeight:"100vh",background:"#0a0b0f",color:"#e2e4ec",fontFamily:"'DM Mono','Fira Mono',monospace",paddingBottom:80}}>
@@ -1099,7 +1297,8 @@ root.render(React.createElement(App));
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})} />}
             {view==="receipts" && <ReceiptsView
               transactions={visibleTxns} receipts={receipts}
-              onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})} />}
+              onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})}
+              gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} onScanGmail={scanGmailEmails} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -1116,12 +1315,28 @@ root.render(React.createElement(App));
             localStorage.setItem(GIST_TOKEN_KEY, trimmed);
             if (trimmed) {
               setSyncStatus("syncing");
+              // Pause auto-sync while we load remote data — prevents overwriting gist with stale local state
+              syncReady.current = false;
               try {
                 const existing = await gistFindExisting(trimmed);
-                if (existing) { setGistId(existing.id); localStorage.setItem(GIST_ID_KEY, existing.id); showToast("Sync connected — existing data found"); }
-                else { showToast("Sync ready — will create gist on next save"); }
+                if (existing) {
+                  setGistId(existing.id);
+                  localStorage.setItem(GIST_ID_KEY, existing.id);
+                  // Fetch and merge remote data before auto-sync re-enables
+                  const remote = await gistFetch(trimmed, existing.id);
+                  if (remote.merchantRules) setMerchantRules(r => ({...r,...remote.merchantRules}));
+                  if (remote.receipts)      setReceipts(r => ({...r,...remote.receipts}));
+                  if (remote.pinnedSubs)    setPinnedSubs(remote.pinnedSubs);
+                  if (remote.accounts)      setAccounts(remote.accounts);
+                  if (remote.cycleStart)    setCycleStart(remote.cycleStart);
+                  showToast("Sync connected — remote data loaded");
+                } else {
+                  showToast("Sync ready — will create gist on next save");
+                }
                 setSyncStatus("synced");
               } catch(e) { setSyncStatus("error"); showToast("Could not connect to GitHub","error"); }
+              // Re-enable auto-sync after React has settled state
+              setTimeout(() => { syncReady.current = true; }, 600);
             } else { setGistId(""); localStorage.removeItem(GIST_ID_KEY); setSyncStatus("idle"); }
           }}
           monzoStatus={monzoStatus} onMonzoConnect={connectMonzo}
@@ -1129,10 +1344,16 @@ root.render(React.createElement(App));
           starlingToken={starlingToken} onStarlingTokenSave={tok=>{const t=tok.trim();setStarlingToken(t);t?localStorage.setItem(STARLING_TOKEN_KEY,t):localStorage.removeItem(STARLING_TOKEN_KEY);showToast(t?"Starling token saved":"Starling token cleared");}}
           starlingProxy={starlingProxy} onStarlingProxySave={url=>{const u=url.trim();setStarlingProxy(u);u?localStorage.setItem(STARLING_PROXY_KEY,u):localStorage.removeItem(STARLING_PROXY_KEY);showToast(u?"Proxy URL saved":"Proxy URL cleared");}}
           monzoCfgReady={monzoCfgReady}
+          gmailStatus={gmailStatus} onGmailConnect={connectGmail} onGmailDisconnect={()=>{gmailClearTokens();setGmailStatus("disconnected");showToast("Gmail disconnected");}}
           bankSyncing={bankSyncing} onSyncStarling={syncStarling} onSyncMonzo={syncMonzo}
           onExportCredentials={()=>{
-            const cfg=window.MONZO_CONFIG||{};
-            const creds={starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey,monzoClientId:cfg.clientId||"",monzoClientSecret:cfg.clientSecret||"",monzoRedirectUri:cfg.redirectUri||window.location.href.split("?")[0]};
+            const mc=window.MONZO_CONFIG||{};
+            const gc=gmailCfg()||{};
+            const creds={
+              starlingToken,starlingProxy,gistToken,gistId,anthropicKey:apiKey,
+              monzoClientId:mc.clientId||"",monzoClientSecret:mc.clientSecret||"",monzoRedirectUri:mc.redirectUri||window.location.href.split("?")[0],
+              gmailClientId:gc.clientId||"",gmailClientSecret:gc.clientSecret||"",gmailRedirectUri:gc.redirectUri||window.location.href.split("?")[0],
+            };
             const a=document.createElement("a");a.href="data:application/json,"+encodeURIComponent(JSON.stringify(creds,null,2));a.download="finance-tracker-credentials.json";a.click();
           }}
           onImportCredentials={e=>{
@@ -1158,6 +1379,11 @@ root.render(React.createElement(App));
                   window.MONZO_CONFIG=cfg;
                   localStorage.setItem(MONZO_CONFIG_KEY,JSON.stringify(cfg));
                   setMonzoCfgReady(true);
+                }
+                if(c.gmailClientId){
+                  const gcfg={clientId:c.gmailClientId,clientSecret:c.gmailClientSecret||"",redirectUri:c.gmailRedirectUri||window.location.href.split("?")[0]};
+                  gmailSaveCfg(gcfg);
+                  if(localStorage.getItem(GMAIL_ACCESS_KEY)) setGmailStatus("connected");
                 }
                 showToast("Credentials imported");
               } catch { showToast("Invalid credentials file","error"); }
@@ -1204,6 +1430,27 @@ root.render(React.createElement(App));
           });
         }}
         onClose={()=>setReceiptModal(null)} onAiScan={()=>trackAiScan("receipt")} />}
+
+      {gmailModal && <GmailScanModal
+        orders={gmailModal.orders}
+        transactions={transactions}
+        onConfirm={(confirmed) => {
+          const newReceipts = {...receipts};
+          const processed   = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
+          confirmed.forEach(({order, txnId, msgId}) => {
+            if (txnId && order.items?.length) {
+              newReceipts[txnId] = { items: order.items.map(item => ({name:item.name,qty:item.qty||1,amount:item.amount})) };
+            }
+            if (msgId) processed.add(msgId);
+          });
+          // Also mark skipped as processed
+          gmailModal.orders.forEach(o => { if (!confirmed.find(c=>c.msgId===o.msgId)) processed.add(o.msgId); });
+          setReceipts(newReceipts);
+          localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+          setGmailModal(null);
+          showToast(`Saved ${confirmed.filter(c=>c.txnId).length} receipt${confirmed.filter(c=>c.txnId).length===1?"":"s"} from Gmail`);
+        }}
+        onClose={()=>setGmailModal(null)} />}
 
       {toast && <div style={{position:"fixed",bottom:20,left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#f87171":"#4ade80",color:"#0a0b0f",borderRadius:8,padding:"10px 20px",fontWeight:700,fontSize:13,zIndex:200,letterSpacing:0.5,boxShadow:"0 8px 32px rgba(0,0,0,.5)",whiteSpace:"nowrap"}}>{toast.msg}</div>}
     </div>
@@ -2046,8 +2293,106 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
   );
 }
 
+// ─── Gmail Scan Modal ─────────────────────────────────────────────────────────
+function GmailScanModal({orders, transactions, onConfirm, onClose}) {
+  const [items, setItems] = useState(() =>
+    orders.map(o => ({ order:o.order, txnId:o.matchedTxn?.id||null, msgId:o.msgId, skip:false, searching:false, search:"" }))
+  );
+
+  const allTxns = [...transactions].filter(t=>t.amount<0).sort((a,b)=>b.date>a.date?1:-1);
+
+  const update = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it,...patch} : it));
+
+  const confirmed = items.filter(it => !it.skip && it.txnId);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:100,display:"flex",alignItems:"flex-end"}}>
+      <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:"16px 16px 0 0",width:"100%",maxHeight:"88vh",overflowY:"auto",padding:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:700,letterSpacing:1}}>📧 GMAIL ORDERS — {orders.length} found</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#4b5563",fontSize:20,cursor:"pointer"}}>✕</button>
+        </div>
+
+        {items.map((it, i) => {
+          const filteredTxns = allTxns.filter(t =>
+            !it.search || t.description?.toLowerCase().includes(it.search.toLowerCase()) ||
+            Math.abs(t.amount).toFixed(2).includes(it.search)
+          ).slice(0, 20);
+          const matchedTx = allTxns.find(t => t.id === it.txnId);
+          return (
+            <div key={i} style={{background:it.skip?"#0a0b0f":"#111318",border:`1px solid ${it.skip?"#1c1f2e":it.txnId?"#4ade8040":"#f8717130"}`,borderRadius:10,marginBottom:10,overflow:"hidden",opacity:it.skip?0.4:1}}>
+              {/* Order header */}
+              <div style={{padding:"10px 14px",borderBottom:"1px solid #1c1f2e"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontWeight:700,fontSize:13}}>{it.order.storeName||"Unknown store"}</div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:13,fontWeight:700,color:"#94a3b8"}}>{it.order.orderTotal?fmt(it.order.orderTotal):""}</span>
+                    <button onClick={()=>update(i,{skip:!it.skip})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.skip?"#4ade80":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                      {it.skip?"restore":"skip"}
+                    </button>
+                  </div>
+                </div>
+                <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{it.order.orderDate}</div>
+                {it.order.items?.length>0&&(
+                  <div style={{marginTop:6}}>
+                    {it.order.items.slice(0,3).map((item,j)=>(
+                      <div key={j} style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{item.qty>1?`${item.qty}× `:""}{item.name} — {fmt(item.amount)}</div>
+                    ))}
+                    {it.order.items.length>3&&<div style={{fontSize:10,color:"#4b5563",marginTop:2}}>+{it.order.items.length-3} more items</div>}
+                  </div>
+                )}
+              </div>
+              {/* Transaction match */}
+              {!it.skip&&(
+                <div style={{padding:"10px 14px"}}>
+                  <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Match to transaction</div>
+                  {!it.searching ? (
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                      {matchedTx
+                        ? <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:700,color:"#4ade80"}}>✓ {matchedTx.description}</div>
+                            <div style={{fontSize:10,color:"#4b5563"}}>{matchedTx.date} · {fmt(Math.abs(matchedTx.amount))}</div>
+                          </div>
+                        : <div style={{fontSize:11,color:"#f87171",flex:1}}>No match found</div>
+                      }
+                      <button onClick={()=>update(i,{searching:true,search:""})} style={{background:"#1c1f2e",border:"1px solid #2a2d3a",borderRadius:6,color:"#94a3b8",fontSize:10,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                        {matchedTx?"change":"pick"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <input autoFocus placeholder="Search transactions…" value={it.search} onChange={e=>update(i,{search:e.target.value})}
+                        style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:12,marginBottom:6,fontFamily:"inherit",boxSizing:"border-box"}}/>
+                      <div style={{maxHeight:140,overflowY:"auto",border:"1px solid #1c1f2e",borderRadius:6}}>
+                        {filteredTxns.map(t=>(
+                          <div key={t.id} onClick={()=>update(i,{txnId:t.id,searching:false})}
+                            style={{padding:"7px 10px",cursor:"pointer",borderBottom:"1px solid #1c1f2e",fontSize:12}}>
+                            <div style={{fontWeight:700}}>{t.description}</div>
+                            <div style={{fontSize:10,color:"#4b5563"}}>{t.date} · {fmt(Math.abs(t.amount))}</div>
+                          </div>
+                        ))}
+                        {filteredTxns.length===0&&<div style={{padding:"10px",fontSize:11,color:"#4b5563"}}>No transactions found</div>}
+                      </div>
+                      <button onClick={()=>update(i,{searching:false})} style={{marginTop:6,background:"none",border:"none",color:"#4b5563",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>cancel</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        <button onClick={()=>onConfirm(items.filter(it=>!it.skip))}
+          style={{width:"100%",background:confirmed.length?"#4ade80":"#1c1f2e",border:"none",color:confirmed.length?"#0a0b0f":"#4b5563",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:confirmed.length?"pointer":"default",letterSpacing:1,marginTop:4}}>
+          SAVE {confirmed.length} RECEIPT{confirmed.length===1?"":"S"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings Modal ───────────────────────────────────────────────────────────
-function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady}) {
+function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,onGistTokenSave,syncStatus,monzoStatus,onMonzoConnect,onMonzoDisconnect,starlingToken,onStarlingTokenSave,starlingProxy,onStarlingProxySave,bankSyncing,onSyncStarling,onSyncMonzo,onExportCredentials,onImportCredentials,monzoCfgReady,gmailStatus,onGmailConnect,onGmailDisconnect}) {
   const credImportRef = useRef();
   const [val,setVal]                   = useState(cycleStart);
   const [keyInput,setKeyInput]         = useState(apiKey||"");
@@ -2057,6 +2402,9 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
   const [showStarlingCfg,setShowStarlingCfg] = useState(false);
   const [showGistCfg,setShowGistCfg]   = useState(false);
   const [showApiCfg,setShowApiCfg]     = useState(false);
+  const [showGmailCfg,setShowGmailCfg] = useState(false);
+  const [gmailClientId,setGmailClientId]     = useState(()=>gmailCfg()?.clientId||"");
+  const [gmailClientSecret,setGmailClientSecret] = useState(()=>gmailCfg()?.clientSecret||"");
 
   const starlingOk   = Boolean(starlingToken && starlingProxy);
   const monzoOk      = monzoCfgReady && monzoStatus === "connected";
@@ -2162,6 +2510,36 @@ function SettingsModal({cycleStart,onSave,onClose,apiKey,onApiKeySave,gistToken,
             </div>
             {!monzoCfgReady&&<div style={{fontSize:10,color:"#4b5563",marginTop:8,lineHeight:1.5}}>Import credentials or rebuild with config.js to enable Monzo OAuth.</div>}
           </div>
+        </Row>
+
+        {/* ── Gmail ── */}
+        <Row label="Gmail Receipts">
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <Chip ok={gmailStatus==="connected"} label={gmailStatus==="connected"?"Connected":"Not configured"}/>
+              {gmailStatus==="connecting"&&<span style={{fontSize:10,color:"#fbbf24",marginLeft:8}}>⟳ Connecting…</span>}
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {gmailStatus==="connected"
+                ? <button onClick={onGmailDisconnect} style={{background:"none",border:"none",color:"#f87171",fontSize:11,cursor:"pointer",padding:0,letterSpacing:1}}>disconnect</button>
+                : <button onClick={()=>{
+                    const redirectUri = window.location.href.split("?")[0];
+                    gmailSaveCfg({clientId:gmailClientId.trim(),clientSecret:gmailClientSecret.trim(),redirectUri});
+                    onGmailConnect();
+                  }} style={{background:"#60a5fa15",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:7,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:"pointer",letterSpacing:1}}>CONNECT</button>
+              }
+              <CfgToggle open={showGmailCfg} onToggle={()=>setShowGmailCfg(v=>!v)}/>
+            </div>
+          </div>
+          {showGmailCfg&&(
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:"#4b5563",marginBottom:6,lineHeight:1.5}}>Google OAuth credentials — create at console.cloud.google.com, enable Gmail API, add Web application client.</div>
+              <input type="password" value={gmailClientId} onChange={e=>setGmailClientId(e.target.value)} placeholder="Google Client ID" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientId?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
+              <input type="password" value={gmailClientSecret} onChange={e=>setGmailClientSecret(e.target.value)} placeholder="Google Client Secret" style={{width:"100%",background:"#1c1f2e",border:`1.5px solid ${gmailClientSecret?"#60a5fa":"#2a2d3a"}`,borderRadius:7,padding:"9px 10px",color:"#e2e4ec",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6}}/>
+              <div style={{fontSize:10,color:"#4b5563",lineHeight:1.5}}>Authorised redirect URI to add in Google Console: <span style={{color:"#94a3b8",wordBreak:"break-all"}}>{window.location.href.split("?")[0]}</span></div>
+            </div>
+          )}
+          {!showGmailCfg&&gmailStatus!=="connected"&&<div style={{fontSize:10,color:"#4b5563",marginTop:6,lineHeight:1.5}}>Connect to scan your Gmail "receipts" label and auto-extract order items. Scans appear in the Receipts tab.</div>}
         </Row>
 
         {/* ── GitHub Sync ── */}
@@ -2378,20 +2756,28 @@ function InsightsView({transactions, periods, activeAccounts, cycleStart, period
 
 
 // ─── Receipts View ────────────────────────────────────────────────────────────
-function ReceiptsView({transactions, receipts, onAdd}) {
+function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, onScanGmail}) {
   const withReceipts = transactions.filter(t => receipts[t.id]?.items?.length > 0)
     .sort((a,b) => b.date > a.date ? 1 : -1);
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <SectionLabel>{withReceipts.length} receipts</SectionLabel>
-        <button onClick={onAdd} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ ADD RECEIPT</button>
+        <div style={{display:"flex",gap:6}}>
+          {gmailStatus==="connected" && (
+            <button onClick={onScanGmail} disabled={gmailSyncing}
+              style={{background:gmailSyncing?"#1c1f2e":"#60a5fa15",border:`1px solid ${gmailSyncing?"#2a2d3a":"#60a5fa40"}`,color:gmailSyncing?"#4b5563":"#60a5fa",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:gmailSyncing?"default":"pointer",letterSpacing:1}}>
+              {gmailSyncing?"⟳ SCANNING…":"📧 GMAIL"}
+            </button>
+          )}
+          <button onClick={onAdd} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ ADD RECEIPT</button>
+        </div>
       </div>
       {withReceipts.length===0&&(
         <div style={{textAlign:"center",marginTop:40,color:"#4b5563"}}>
           <div style={{fontSize:36}}>🧾</div>
           <div style={{fontSize:15,fontWeight:700,marginTop:12}}>No receipts yet</div>
-          <div style={{fontSize:12,marginTop:6,lineHeight:1.6}}>Add a receipt photo to see<br/>item-level spending breakdown</div>
+          <div style={{fontSize:12,marginTop:6,lineHeight:1.6}}>Add a receipt photo or scan Gmail<br/>to see item-level spending breakdown</div>
         </div>
       )}
       {withReceipts.map(t=>{
