@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.4</title>
+<title>Finance Tracker v3.5</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -1238,6 +1238,7 @@ root.render(React.createElement(App));
         periods,
         setComparePeriod,
         visibleTxns,
+        compareTxns,
         periodLabel,
         receipts,
         onAddReceipt: (txId) => setReceiptModal({ step: "upload", pinnedTxId: txId }),
@@ -1585,17 +1586,51 @@ root.render(React.createElement(App));
       const daysSince = Math.round((today - new Date(last.date)) / 864e5);
       const longCycle = frequency === "Yearly" || frequency === "Quarterly";
       const possiblyEnded = !longCycle && daysSince > avgInterval * 3;
-      subs.push({ name: displayName, amount: avgAmount, frequency, lastPaid: last.date, daysSince, nextDue: nextDate.toISOString().slice(0, 10), daysUntil, category: last.category || "Other", count: sorted.length, possiblyEnded });
+      subs.push({ name: displayName, amount: avgAmount, frequency, lastPaid: last.date, daysSince, nextDue: nextDate.toISOString().slice(0, 10), daysUntil, category: last.category || "Other", count: sorted.length, possiblyEnded, txnIds: new Set(bestCluster.map((t) => t.id)) });
     });
     return subs.sort((a, b) => a.daysUntil - b.daysUntil);
   }
-  function SpendView({ spending, compareSpend, totalSpend, displayPeriod, comparePeriod, visibleTxns, periodLabel, receipts, onAddReceipt, allTransactions, pinnedSubs, setPinnedSubs }) {
+  function computeSubTxnIds(allTxns, pinnedSubsArr) {
+    const ids = /* @__PURE__ */ new Set();
+    detectSubscriptions(allTxns || []).forEach((sub) => {
+      if (sub.txnIds) sub.txnIds.forEach((id) => ids.add(id));
+    });
+    (pinnedSubsArr || []).forEach((pinned) => {
+      const pKey = merchantKey(pinned.name);
+      if (pKey.length < 2) return;
+      (allTxns || []).filter((t) => t.amount < 0).forEach((t) => {
+        const tKey = merchantKey(t.description || "");
+        if (tKey === pKey || tKey.includes(pKey) || pKey.includes(tKey)) {
+          const diff = Math.abs(Math.abs(t.amount) - pinned.amount);
+          if (diff / Math.max(pinned.amount, 0.01) < 0.15) ids.add(t.id);
+        }
+      });
+    });
+    return ids;
+  }
+  function spendFromTxns(txns) {
+    const out = {};
+    txns.forEach((t) => {
+      if (t.amount < 0 && !EXCLUDE_FROM_SPEND.includes(t.category || "Other")) {
+        const c = t.category || "Other";
+        out[c] = (out[c] || 0) + Math.abs(t.amount);
+      }
+    });
+    return out;
+  }
+  function SpendView({ spending, compareSpend, totalSpend, displayPeriod, comparePeriod, visibleTxns, compareTxns, periodLabel, receipts, onAddReceipt, allTransactions, pinnedSubs, setPinnedSubs }) {
     const [expandedCat, setExpandedCat] = useState(null);
     const [expandedMerchant, setExpandedMerchant] = useState(null);
     const [showSubs, setShowSubs] = useState(true);
     const [addSubOpen, setAddSubOpen] = useState(false);
     const [newSub, setNewSub] = useState({ name: "", amount: "", frequency: "Monthly", note: "" });
-    const allCats = [.../* @__PURE__ */ new Set([...Object.keys(spending), ...Object.keys(compareSpend)])].sort((a, b) => (spending[b] || 0) - (spending[a] || 0));
+    const subTxnIds = computeSubTxnIds(allTransactions, pinnedSubs);
+    const spendTxns = visibleTxns.filter((t) => !subTxnIds.has(t.id));
+    const cmpTxns = (compareTxns || []).filter((t) => !subTxnIds.has(t.id));
+    const filteredSpend = spendFromTxns(spendTxns);
+    const filteredCmpSpend = spendFromTxns(cmpTxns);
+    const filteredTotal = Object.values(filteredSpend).reduce((s, v) => s + v, 0);
+    const allCats = [.../* @__PURE__ */ new Set([...Object.keys(filteredSpend), ...Object.keys(filteredCmpSpend)])].sort((a, b) => (filteredSpend[b] || 0) - (filteredSpend[a] || 0));
     const autoSubs = detectSubscriptions(allTransactions || []).filter((s) => !s.possiblyEnded);
     const pinnedSubsArr = pinnedSubs || [];
     const pinnedNames = new Set(pinnedSubsArr.map((p) => p.name.toLowerCase()));
@@ -1606,14 +1641,14 @@ root.render(React.createElement(App));
     const ccTotal = visibleTxns.filter((t) => ["Fuel", "Parking"].includes(t.category) && t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
     function getMerchantBreakdown(cat) {
       const map = {};
-      visibleTxns.filter((t) => t.category === cat && t.amount < 0).forEach((t) => {
+      spendTxns.filter((t) => t.category === cat && t.amount < 0).forEach((t) => {
         const k = t.description || "Unknown";
         map[k] = (map[k] || 0) + Math.abs(t.amount);
       });
       return Object.entries(map).sort((a, b) => b[1] - a[1]);
     }
     function getMerchantTransactions(cat, merchant) {
-      return visibleTxns.filter((t) => t.category === cat && t.amount < 0 && (t.description || "Unknown") === merchant).sort((a, b) => b.date > a.date ? 1 : -1);
+      return spendTxns.filter((t) => t.category === cat && t.amount < 0 && (t.description || "Unknown") === merchant).sort((a, b) => b.date > a.date ? 1 : -1);
     }
     function getMerchantItems(cat, merchant) {
       const txns = getMerchantTransactions(cat, merchant);
@@ -1690,8 +1725,8 @@ root.render(React.createElement(App));
       const dueLabel = s.pinned ? s.note || "Manually pinned" : s.possiblyEnded ? `Possibly cancelled \u2014 last paid ${s.daysSince}d ago` : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil) === 1 ? "" : "s"}` : s.daysUntil === 0 ? "Due today" : `Due in ${s.daysUntil} day${s.daysUntil === 1 ? "" : "s"}`;
       const lastLabel = s.pinned ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
       return /* @__PURE__ */ React.createElement("div", { key: s.name + i, style: { padding: "10px 14px", borderBottom: i < subs.length - 1 ? "1px solid #1c1f2e" : "none", opacity: s.possiblyEnded ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: s.pinned ? "transparent" : dotColor, border: s.pinned ? "2px solid #a78bfa" : "none" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.possiblyEnded ? "line-through" : "none", color: s.possiblyEnded ? "#4b5563" : "#e2e4ec" } }, s.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#4b5563", marginRight: 8 } }, s.frequency), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: s.possiblyEnded ? "#4b5563" : "#a78bfa" } }, fmt(s.amount)), s.pinned && /* @__PURE__ */ React.createElement("button", { onClick: () => setPinnedSubs((prev) => prev.filter((p) => p.name !== s.name)), style: { background: "none", border: "none", color: "#4b5563", fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, paddingLeft: 15 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, lastLabel, !s.pinned && s.lastPaid ? ` \xB7 ${s.lastPaid}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: dotColor } }, dueLabel)));
-    })), showSubs && subs.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563" } }, "No subscriptions detected \u2014 use + Add to pin one manually.")), /* @__PURE__ */ React.createElement(SectionLabel, null, periodLabel(displayPeriod), comparePeriod ? ` vs ${periodLabel(comparePeriod)}` : " breakdown"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #f8717140", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#94a3b8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "Total Spend"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 26, fontWeight: 700, color: "#f87171" } }, fmt(totalSpend))), allCats.map((cat) => {
-      const a = spending[cat] || 0, b = compareSpend[cat] || 0, delta = a - b;
+    })), showSubs && subs.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563" } }, "No subscriptions detected \u2014 use + Add to pin one manually.")), /* @__PURE__ */ React.createElement(SectionLabel, null, periodLabel(displayPeriod), comparePeriod ? ` vs ${periodLabel(comparePeriod)}` : " breakdown"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #f8717140", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#94a3b8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "Total Spend"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 26, fontWeight: 700, color: "#f87171" } }, fmt(filteredTotal))), allCats.map((cat) => {
+      const a = filteredSpend[cat] || 0, b = filteredCmpSpend[cat] || 0, delta = a - b;
       const isOpen = expandedCat === cat;
       const merchants = isOpen ? getMerchantBreakdown(cat) : [];
       return /* @__PURE__ */ React.createElement("div", { key: cat, style: { background: "#0f1117", border: `1px solid ${isOpen ? (CAT_COLORS[cat] || "#60a5fa") + "60" : "#1c1f2e"}`, borderRadius: 8, marginBottom: 6, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { onClick: () => {

@@ -1086,7 +1086,7 @@ root.render(React.createElement(App));
             {view==="spend" && <SpendView
               spending={spending} compareSpend={compareSpend} totalSpend={totalSpend}
               displayPeriod={displayPeriod} comparePeriod={comparePeriod} periods={periods}
-              setComparePeriod={setComparePeriod} visibleTxns={visibleTxns} periodLabel={periodLabel}
+              setComparePeriod={setComparePeriod} visibleTxns={visibleTxns} compareTxns={compareTxns} periodLabel={periodLabel}
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})}
               allTransactions={applyRules(transactions.filter(t => activeAccounts.includes(t.accountId)))}
               pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} />}
@@ -1485,20 +1485,61 @@ function detectSubscriptions(allTxns) {
     const longCycle = frequency === "Yearly" || frequency === "Quarterly";
     const possiblyEnded = !longCycle && daysSince > avgInterval * 3;
 
-    subs.push({ name: displayName, amount: avgAmount, frequency, lastPaid: last.date, daysSince, nextDue: nextDate.toISOString().slice(0, 10), daysUntil, category: last.category || "Other", count: sorted.length, possiblyEnded });
+    subs.push({ name: displayName, amount: avgAmount, frequency, lastPaid: last.date, daysSince, nextDue: nextDate.toISOString().slice(0, 10), daysUntil, category: last.category || "Other", count: sorted.length, possiblyEnded, txnIds: new Set(bestCluster.map(t => t.id)) });
   });
 
   return subs.sort((a, b) => a.daysUntil - b.daysUntil);
 }
 
+// Returns a Set of transaction IDs that are subscription payments (auto or pinned).
+// Used to exclude subscription payments from the spending breakdown.
+function computeSubTxnIds(allTxns, pinnedSubsArr) {
+  const ids = new Set();
+  detectSubscriptions(allTxns || []).forEach(sub => {
+    if (sub.txnIds) sub.txnIds.forEach(id => ids.add(id));
+  });
+  (pinnedSubsArr || []).forEach(pinned => {
+    const pKey = merchantKey(pinned.name);
+    if (pKey.length < 2) return;
+    (allTxns || []).filter(t => t.amount < 0).forEach(t => {
+      const tKey = merchantKey(t.description || "");
+      if (tKey === pKey || tKey.includes(pKey) || pKey.includes(tKey)) {
+        const diff = Math.abs(Math.abs(t.amount) - pinned.amount);
+        if (diff / Math.max(pinned.amount, 0.01) < 0.15) ids.add(t.id);
+      }
+    });
+  });
+  return ids;
+}
+
+function spendFromTxns(txns) {
+  const out = {};
+  txns.forEach(t => {
+    if (t.amount < 0 && !EXCLUDE_FROM_SPEND.includes(t.category || "Other")) {
+      const c = t.category || "Other";
+      out[c] = (out[c] || 0) + Math.abs(t.amount);
+    }
+  });
+  return out;
+}
+
 // ─── Spend View ───────────────────────────────────────────────────────────────
-function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
+function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
   const [addSubOpen, setAddSubOpen]             = useState(false);
   const [newSub, setNewSub]                     = useState({name:"",amount:"",frequency:"Monthly",note:""});
-  const allCats = [...new Set([...Object.keys(spending),...Object.keys(compareSpend)])].sort((a,b)=>(spending[b]||0)-(spending[a]||0));
+
+  // IDs of transactions that are subscription payments — excluded from spending breakdown
+  const subTxnIds = computeSubTxnIds(allTransactions, pinnedSubs);
+  const spendTxns    = visibleTxns.filter(t => !subTxnIds.has(t.id));
+  const cmpTxns      = (compareTxns || []).filter(t => !subTxnIds.has(t.id));
+  const filteredSpend    = spendFromTxns(spendTxns);
+  const filteredCmpSpend = spendFromTxns(cmpTxns);
+  const filteredTotal    = Object.values(filteredSpend).reduce((s, v) => s + v, 0);
+
+  const allCats = [...new Set([...Object.keys(filteredSpend),...Object.keys(filteredCmpSpend)])].sort((a,b)=>(filteredSpend[b]||0)-(filteredSpend[a]||0));
   const autoSubs = detectSubscriptions(allTransactions || []).filter(s => !s.possiblyEnded);
   const pinnedSubsArr = pinnedSubs || [];
   // Merge: pinned first, then auto-detected (skip auto if same name already pinned)
@@ -1511,12 +1552,12 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
 
   function getMerchantBreakdown(cat) {
     const map = {};
-    visibleTxns.filter(t=>t.category===cat&&t.amount<0).forEach(t=>{ const k=t.description||"Unknown"; map[k]=(map[k]||0)+Math.abs(t.amount); });
+    spendTxns.filter(t=>t.category===cat&&t.amount<0).forEach(t=>{ const k=t.description||"Unknown"; map[k]=(map[k]||0)+Math.abs(t.amount); });
     return Object.entries(map).sort((a,b)=>b[1]-a[1]);
   }
 
   function getMerchantTransactions(cat, merchant) {
-    return visibleTxns.filter(t=>t.category===cat&&t.amount<0&&(t.description||"Unknown")===merchant)
+    return spendTxns.filter(t=>t.category===cat&&t.amount<0&&(t.description||"Unknown")===merchant)
       .sort((a,b)=>b.date>a.date?1:-1);
   }
 
@@ -1623,10 +1664,10 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
       <SectionLabel>{periodLabel(displayPeriod)}{comparePeriod?` vs ${periodLabel(comparePeriod)}`:" breakdown"}</SectionLabel>
       <div style={{background:"#0f1117",border:"1px solid #f8717140",borderRadius:10,padding:"14px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontSize:12,color:"#94a3b8",fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Total Spend</div>
-        <div style={{fontSize:26,fontWeight:700,color:"#f87171"}}>{fmt(totalSpend)}</div>
+        <div style={{fontSize:26,fontWeight:700,color:"#f87171"}}>{fmt(filteredTotal)}</div>
       </div>
       {allCats.map(cat=>{
-        const a=spending[cat]||0, b=compareSpend[cat]||0, delta=a-b;
+        const a=filteredSpend[cat]||0, b=filteredCmpSpend[cat]||0, delta=a-b;
         const isOpen=expandedCat===cat;
         const merchants=isOpen?getMerchantBreakdown(cat):[];
         return (
