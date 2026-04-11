@@ -878,7 +878,10 @@ root.render(React.createElement(App));
           }
         } catch(e) {
           console.error("[Starling] error", e);
-          finalMsg = `Starling: ${e.message}`;
+          const isCors = e instanceof TypeError && e.message.toLowerCase().includes("fetch");
+          finalMsg = isCors
+            ? "Starling: CORS blocked — bank API doesn't allow browser requests. A backend proxy is needed."
+            : `Starling: ${e.message}`;
           finalType = "error";
         }
       }
