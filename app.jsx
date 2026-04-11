@@ -314,6 +314,7 @@ const GMAIL_EXPIRY_KEY    = "finance-tracker-gmail-expiry";
 const GMAIL_CLIENT_KEY    = "finance-tracker-gmail-client";
 const GMAIL_VERIFIER_KEY  = "finance-tracker-gmail-verifier";
 const GMAIL_PROCESSED_KEY = "finance-tracker-gmail-processed";
+const GMAIL_PENDING_KEY   = "finance-tracker-gmail-pending";
 
 // PKCE helpers
 function pkceVerifier() {
@@ -675,6 +676,7 @@ export default function App() {
   const [gmailClientId, setGmailClientId]   = useState(() => gmailCfg()?.clientId || "");
   const [gmailClientSecret, setGmailClientSecret] = useState(() => gmailCfg()?.clientSecret || "");
   const [gmailSyncing, setGmailSyncing]     = useState(false);
+  const [gmailProgress, setGmailProgress]   = useState({ current: 0, total: 0 });
   const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
     try {
@@ -1198,21 +1200,24 @@ root.render(React.createElement(App));
       const newMsgs = messages.filter(m => !processed.has(m.id));
       if (!newMsgs.length) { showToast("No new emails in receipts label"); setGmailSyncing(false); return; }
 
-      showToast(`Scanning ${Math.min(newMsgs.length,20)} email${newMsgs.length===1?"":"s"}…`);
+      const toScan = newMsgs.slice(0, 20);
+      setGmailProgress({ current: 0, total: toScan.length });
       const orders = [];
-      for (const msg of newMsgs.slice(0,20)) {
-        // Step 4: fetch each message
+      for (let idx = 0; idx < toScan.length; idx++) {
+        const msg = toScan[idx];
+        setGmailProgress({ current: idx + 1, total: toScan.length });
+        // Fetch message
         let full;
         try { full = await gmailGetMessage(token, msg.id); }
-        catch(e) { showToast(`Fetch message failed: ${e.message}`, "error"); setGmailSyncing(false); return; }
+        catch(e) { showToast(`Fetch message failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
         const hdrs    = full.payload?.headers || [];
         const subject = hdrs.find(h=>h.name==="Subject")?.value || "";
         const from    = hdrs.find(h=>h.name==="From")?.value || "";
         const body    = gmailDecodeBody(full.payload);
-        // Step 5: AI extraction
+        // AI extraction
         let order;
         try { order = await extractOrderFromEmail(subject, from, body, apiKey); }
-        catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); return; }
+        catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
         if (order) {
           const oDate = new Date(order.orderDate || todayStr());
           const matched = [...transactions]
@@ -1229,9 +1234,14 @@ root.render(React.createElement(App));
           processed.add(msg.id);
         }
       }
+      setGmailProgress({ current: 0, total: 0 });
       localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
-      if (!orders.length) { showToast("No order confirmations found in new emails"); }
-      else { setGmailModal({ orders, processed }); }
+      // Load pending items saved for later, prepend to results
+      const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
+      const pendingOrders = pending.map(p => ({ order:p.order, matchedTxn:null, msgId:p.msgId, isPending:true }));
+      const allOrders = [...pendingOrders, ...orders];
+      if (!allOrders.length) { showToast("No order confirmations found in new emails"); }
+      else { setGmailModal({ orders: allOrders, processed }); }
     } catch(e) {
       console.error("[Gmail scan] unexpected error:", e);
       showToast(`Gmail scan failed: ${e.message}`, "error");
@@ -1332,7 +1342,7 @@ root.render(React.createElement(App));
             {view==="receipts" && <ReceiptsView
               transactions={visibleTxns} receipts={receipts}
               onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})}
-              gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} onScanGmail={scanGmailEmails} />}
+              gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} gmailProgress={gmailProgress} onScanGmail={scanGmailEmails} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -1482,6 +1492,24 @@ root.render(React.createElement(App));
       {gmailModal && <GmailScanModal
         orders={gmailModal.orders}
         transactions={transactions}
+        onSaveOne={(item) => {
+          if (!item.txnId || !item.order.items?.length) return;
+          setReceipts(prev => ({...prev, [item.txnId]: { items: item.order.items.map(i=>({name:i.name,qty:i.qty||1,amount:i.amount})) }}));
+          const processed = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
+          processed.add(item.msgId);
+          localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
+          // Remove from pending if it was there
+          const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
+          localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p=>p.msgId!==item.msgId)));
+          setGmailModal(prev => ({...prev, processed}));
+          showToast("Receipt saved");
+        }}
+        onSaveLater={(item) => {
+          const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
+          const updated = [...pending.filter(p=>p.msgId!==item.msgId), {order:item.order, msgId:item.msgId}];
+          localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(updated));
+          showToast("Saved for later");
+        }}
         onConfirm={(confirmed) => {
           const newReceipts = {...receipts};
           const processed   = gmailModal.processed ? new Set(gmailModal.processed) : new Set();
@@ -1491,8 +1519,10 @@ root.render(React.createElement(App));
             }
             if (msgId) processed.add(msgId);
           });
-          // Also mark skipped as processed
           gmailModal.orders.forEach(o => { if (!confirmed.find(c=>c.msgId===o.msgId)) processed.add(o.msgId); });
+          // Clear confirmed/skipped from pending
+          const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
+          localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(pending.filter(p => !gmailModal.orders.find(o=>o.msgId===p.msgId))));
           setReceipts(newReceipts);
           localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
           setGmailModal(null);
@@ -2342,28 +2372,51 @@ function ImportModal({importState,setImportState,accounts,fileRef,onFile,onAI,on
 }
 
 // ─── Gmail Scan Modal ─────────────────────────────────────────────────────────
-function GmailScanModal({orders, transactions, onConfirm, onClose}) {
+function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, onSaveLater}) {
   const [items, setItems] = useState(() =>
-    orders.map(o => ({ order:o.order, txnId:o.matchedTxn?.id||null, msgId:o.msgId, skip:false, searching:false, search:"", editing:false }))
+    orders.map(o => ({
+      order: o.order, txnId: o.matchedTxn?.id||null, msgId: o.msgId,
+      skip: false, later: false, saved: false,
+      searching: false, search: "", editing: false,
+      isPending: o.isPending||false,
+    }))
   );
 
   const allTxns = [...transactions].filter(t=>t.amount<0).sort((a,b)=>b.date>a.date?1:-1);
 
-  const update = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it,...patch} : it));
+  const update     = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it,...patch} : it));
   const updateOrder = (i, patch) => setItems(prev => prev.map((it,j) => j===i ? {...it, order:{...it.order,...patch}} : it));
-  const updateItem = (i, j, patch) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.map((item,jj)=>jj===j?{...item,...patch}:item)}} : it));
-  const removeItem = (i, j) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.filter((_,jj)=>jj!==j)}} : it));
-  const addItem    = (i) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:[...(it.order.items||[]),{name:"",qty:1,amount:0}]}} : it));
+  const updateItem  = (i, j, patch) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.map((item,jj)=>jj===j?{...item,...patch}:item)}} : it));
+  const removeItem  = (i, j) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:it.order.items.filter((_,jj)=>jj!==j)}} : it));
+  const addItem     = (i, preset={}) => setItems(prev => prev.map((it,ii) => ii===i ? {...it, order:{...it.order, items:[...(it.order.items||[]),{name:"",qty:1,amount:0,...preset}]}} : it));
 
-  const confirmed = items.filter(it => !it.skip && it.txnId);
-  const inputStyle = {background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:5,color:"#e2e4ec",padding:"5px 8px",fontSize:11,fontFamily:"inherit",boxSizing:"border-box"};
+  const pendingCount  = items.filter(it => it.isPending && !it.saved && !it.skip).length;
+  const newCount      = items.filter(it => !it.isPending && !it.saved && !it.skip).length;
+  const unsavedMatch  = items.filter(it => !it.skip && !it.saved && !it.later && it.txnId);
+  const inputStyle    = {background:"#0f1117",border:"1px solid #2a2d3a",borderRadius:5,color:"#e2e4ec",padding:"5px 8px",fontSize:11,fontFamily:"inherit",boxSizing:"border-box"};
+
+  const handleSaveOne = (i) => {
+    const it = items[i];
+    onSaveOne(it);
+    update(i, { saved: true, later: false, editing: false });
+  };
+  const handleLater = (i) => {
+    const it = items[i];
+    onSaveLater(it);
+    update(i, { later: true, skip: false, editing: false });
+  };
 
   return (
     <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:100,display:"flex",alignItems:"flex-end"}}>
       <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:"16px 16px 0 0",width:"100%",maxHeight:"88vh",overflowY:"auto",padding:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-          <div style={{fontSize:14,fontWeight:700,letterSpacing:1}}>📧 GMAIL ORDERS — {orders.length} found</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+          <div style={{fontSize:14,fontWeight:700,letterSpacing:1}}>📧 GMAIL ORDERS</div>
           <button onClick={onClose} style={{background:"none",border:"none",color:"#4b5563",fontSize:20,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{fontSize:10,color:"#4b5563",marginBottom:14}}>
+          {newCount > 0 && <span>{newCount} new</span>}
+          {newCount > 0 && pendingCount > 0 && <span> · </span>}
+          {pendingCount > 0 && <span style={{color:"#fbbf24"}}>{pendingCount} saved for later</span>}
         </div>
 
         {items.map((it, i) => {
@@ -2371,49 +2424,90 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
             !it.search || t.description?.toLowerCase().includes(it.search.toLowerCase()) ||
             Math.abs(t.amount).toFixed(2).includes(it.search)
           ).slice(0, 20);
-          const matchedTx = allTxns.find(t => t.id === it.txnId);
+          const matchedTx   = allTxns.find(t => t.id === it.txnId);
+          const itemsTotal  = (it.order.items||[]).reduce((s,item) => s + (item.amount * (item.qty||1)), 0);
+          const orderTotal  = it.order.orderTotal || 0;
+          const balanceDiff = orderTotal ? Math.abs(itemsTotal - orderTotal) : 0;
+
+          // Border colour: saved=green, later=amber, skip=dim, matched=green-dim, unmatched=red-dim
+          const borderColor = it.saved ? "#4ade80" : it.later ? "#fbbf2460" : it.skip ? "#1c1f2e" : it.txnId ? "#4ade8040" : "#f8717130";
+
           return (
-            <div key={i} style={{background:it.skip?"#0a0b0f":"#111318",border:`1px solid ${it.skip?"#1c1f2e":it.txnId?"#4ade8040":"#f8717130"}`,borderRadius:10,marginBottom:10,overflow:"hidden",opacity:it.skip?0.4:1}}>
+            <div key={i} style={{background:it.skip||it.later?"#0a0b0f":"#111318",border:`1px solid ${borderColor}`,borderRadius:10,marginBottom:10,overflow:"hidden",opacity:(it.skip||it.saved)?0.45:1}}>
+              {/* Status badges */}
+              {(it.isPending || it.saved || it.later) && (
+                <div style={{padding:"3px 14px",background:it.saved?"#4ade8018":it.later?"#fbbf2418":"#fbbf2410",borderBottom:"1px solid #1c1f2e",fontSize:9,fontWeight:700,letterSpacing:1,color:it.saved?"#4ade80":it.later?"#fbbf24":"#fbbf24"}}>
+                  {it.saved ? "✓ SAVED" : it.later ? "⏸ SAVED FOR LATER" : "⏸ PENDING REVIEW"}
+                </div>
+              )}
               {/* Order header */}
               <div style={{padding:"10px 14px",borderBottom:"1px solid #1c1f2e"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{fontWeight:700,fontSize:13}}>{it.order.storeName||"Unknown store"}</div>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
                     <span style={{fontSize:13,fontWeight:700,color:"#94a3b8"}}>{it.order.orderTotal?fmt(it.order.orderTotal):""}</span>
-                    <button onClick={()=>update(i,{editing:!it.editing,skip:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.editing?"#60a5fa":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
-                      {it.editing?"done":"edit"}
-                    </button>
-                    <button onClick={()=>update(i,{skip:!it.skip,editing:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.skip?"#4ade80":"#4b5563",fontSize:10,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
-                      {it.skip?"restore":"skip"}
-                    </button>
+                    {!it.saved && !it.skip && (
+                      <>
+                        <button onClick={()=>update(i,{editing:!it.editing})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:it.editing?"#60a5fa":"#4b5563",fontSize:10,padding:"2px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                          {it.editing?"done":"edit"}
+                        </button>
+                        {!it.saved && it.txnId && (
+                          <button onClick={()=>handleSaveOne(i)} style={{background:"#4ade8020",border:"1px solid #4ade8060",borderRadius:6,color:"#4ade80",fontSize:10,padding:"2px 7px",cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>
+                            save
+                          </button>
+                        )}
+                        {!it.later && (
+                          <button onClick={()=>handleLater(i)} style={{background:"#fbbf2410",border:"1px solid #fbbf2440",borderRadius:6,color:"#fbbf24",fontSize:10,padding:"2px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                            later
+                          </button>
+                        )}
+                        <button onClick={()=>update(i,{skip:!it.skip,later:false,editing:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:"#4b5563",fontSize:10,padding:"2px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                          skip
+                        </button>
+                      </>
+                    )}
+                    {(it.skip || it.later || it.saved) && (
+                      <button onClick={()=>update(i,{skip:false,later:false,saved:false})} style={{background:"none",border:"1px solid #2a2d3a",borderRadius:6,color:"#60a5fa",fontSize:10,padding:"2px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                        undo
+                      </button>
+                    )}
                   </div>
                 </div>
 
                 {it.editing ? (
                   <div style={{marginTop:8}}>
-                    {/* Store / date / total */}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
                       <input value={it.order.storeName||""} onChange={e=>updateOrder(i,{storeName:e.target.value})}
                         placeholder="Store name" style={{...inputStyle,gridColumn:"1/-1"}}/>
                       <input value={it.order.orderDate||""} onChange={e=>updateOrder(i,{orderDate:e.target.value})}
-                        placeholder="Date (YYYY-MM-DD)" style={inputStyle}/>
+                        placeholder="YYYY-MM-DD" style={inputStyle}/>
                       <input value={it.order.orderTotal||""} onChange={e=>updateOrder(i,{orderTotal:parseFloat(e.target.value)||0})}
-                        placeholder="Total" type="number" step="0.01" style={inputStyle}/>
+                        placeholder="Total £" type="number" step="0.01" style={inputStyle}/>
                     </div>
-                    {/* Items */}
-                    <div style={{fontSize:10,color:"#4b5563",marginBottom:4}}>ITEMS</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontSize:10,color:"#4b5563"}}>ITEMS</div>
+                      {orderTotal > 0 && (
+                        <div style={{fontSize:10,color:balanceDiff<0.01?"#4ade80":"#f87171"}}>
+                          items {fmt(itemsTotal)} / total {fmt(orderTotal)} {balanceDiff<0.01?"✓":`(${fmt(balanceDiff)} off)`}
+                        </div>
+                      )}
+                    </div>
                     {(it.order.items||[]).map((item,j)=>(
-                      <div key={j} style={{display:"grid",gridTemplateColumns:"1fr 44px 64px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
+                      <div key={j} style={{display:"grid",gridTemplateColumns:"1fr 40px 62px 22px",gap:4,marginBottom:4,alignItems:"center"}}>
                         <input value={item.name} onChange={e=>updateItem(i,j,{name:e.target.value})}
                           placeholder="Item name" style={inputStyle}/>
                         <input value={item.qty} onChange={e=>updateItem(i,j,{qty:parseInt(e.target.value)||1})}
                           placeholder="Qty" type="number" min="1" style={{...inputStyle,textAlign:"center"}}/>
                         <input value={item.amount} onChange={e=>updateItem(i,j,{amount:parseFloat(e.target.value)||0})}
-                          placeholder="£0.00" type="number" step="0.01" style={{...inputStyle,textAlign:"right"}}/>
-                        <button onClick={()=>removeItem(i,j)} style={{background:"none",border:"none",color:"#f87171",fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
+                          placeholder="£" type="number" step="0.01" style={{...inputStyle,textAlign:"right"}}/>
+                        <button onClick={()=>removeItem(i,j)} style={{background:"none",border:"none",color:"#f87171",fontSize:13,cursor:"pointer",padding:0,lineHeight:1}}>✕</button>
                       </div>
                     ))}
-                    <button onClick={()=>addItem(i)} style={{background:"none",border:"1px dashed #2a2d3a",borderRadius:5,color:"#4b5563",fontSize:10,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",width:"100%",marginTop:2}}>+ add item</button>
+                    <div style={{display:"flex",gap:6,marginTop:4}}>
+                      <button onClick={()=>addItem(i)} style={{flex:1,background:"none",border:"1px dashed #2a2d3a",borderRadius:5,color:"#4b5563",fontSize:10,padding:"4px 0",cursor:"pointer",fontFamily:"inherit"}}>+ item</button>
+                      <button onClick={()=>addItem(i,{name:"Discount",amount:0,qty:1})} style={{flex:1,background:"#f8717110",border:"1px dashed #f8717140",borderRadius:5,color:"#f87171",fontSize:10,padding:"4px 0",cursor:"pointer",fontFamily:"inherit"}}>− discount</button>
+                      <button onClick={()=>addItem(i,{name:"Delivery",amount:0,qty:1})} style={{flex:1,background:"#60a5fa10",border:"1px dashed #60a5fa40",borderRadius:5,color:"#60a5fa",fontSize:10,padding:"4px 0",cursor:"pointer",fontFamily:"inherit"}}>+ delivery</button>
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -2421,7 +2515,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
                     {it.order.items?.length>0&&(
                       <div style={{marginTop:6}}>
                         {it.order.items.slice(0,3).map((item,j)=>(
-                          <div key={j} style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{item.qty>1?`${item.qty}× `:""}{item.name} — {fmt(item.amount)}</div>
+                          <div key={j} style={{fontSize:11,color:item.amount<0?"#f87171":"#94a3b8",marginTop:2}}>{item.qty>1?`${item.qty}× `:""}{item.name} — {fmt(item.amount)}</div>
                         ))}
                         {it.order.items.length>3&&<div style={{fontSize:10,color:"#4b5563",marginTop:2}}>+{it.order.items.length-3} more items</div>}
                       </div>
@@ -2429,8 +2523,9 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
                   </>
                 )}
               </div>
-              {/* Transaction match */}
-              {!it.skip&&(
+
+              {/* Transaction match — only when not saved/skipped/later */}
+              {!it.skip && !it.saved && !it.later && (
                 <div style={{padding:"10px 14px"}}>
                   <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Match to transaction</div>
                   {!it.searching ? (
@@ -2469,9 +2564,15 @@ function GmailScanModal({orders, transactions, onConfirm, onClose}) {
           );
         })}
 
-        <button onClick={()=>onConfirm(items.filter(it=>!it.skip))}
-          style={{width:"100%",background:confirmed.length?"#4ade80":"#1c1f2e",border:"none",color:confirmed.length?"#0a0b0f":"#4b5563",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:confirmed.length?"pointer":"default",letterSpacing:1,marginTop:4}}>
-          SAVE {confirmed.length} RECEIPT{confirmed.length===1?"":"S"}
+        {unsavedMatch.length > 0 && (
+          <button onClick={()=>onConfirm(items.filter(it=>!it.skip&&!it.saved&&!it.later))}
+            style={{width:"100%",background:"#4ade80",border:"none",color:"#0a0b0f",borderRadius:8,padding:14,fontWeight:700,fontSize:13,cursor:"pointer",letterSpacing:1,marginTop:4}}>
+            SAVE REMAINING {unsavedMatch.length} RECEIPT{unsavedMatch.length===1?"":"S"}
+          </button>
+        )}
+        <button onClick={onClose}
+          style={{width:"100%",background:"none",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:8,padding:12,fontWeight:700,fontSize:12,cursor:"pointer",letterSpacing:1,marginTop:8}}>
+          CLOSE
         </button>
       </div>
     </div>
@@ -2855,7 +2956,7 @@ function InsightsView({transactions, periods, activeAccounts, cycleStart, period
 
 
 // ─── Receipts View ────────────────────────────────────────────────────────────
-function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, onScanGmail}) {
+function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, gmailProgress, onScanGmail}) {
   const withReceipts = transactions.filter(t => receipts[t.id]?.items?.length > 0)
     .sort((a,b) => b.date > a.date ? 1 : -1);
   return (
@@ -2865,8 +2966,12 @@ function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing,
         <div style={{display:"flex",gap:6}}>
           {gmailStatus==="connected" && (
             <button onClick={onScanGmail} disabled={gmailSyncing}
-              style={{background:gmailSyncing?"#1c1f2e":"#60a5fa15",border:`1px solid ${gmailSyncing?"#2a2d3a":"#60a5fa40"}`,color:gmailSyncing?"#4b5563":"#60a5fa",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:gmailSyncing?"default":"pointer",letterSpacing:1}}>
-              {gmailSyncing?"⟳ SCANNING…":"📧 GMAIL"}
+              style={{background:gmailSyncing?"#1c1f2e":"#60a5fa15",border:`1px solid ${gmailSyncing?"#2a2d3a":"#60a5fa40"}`,color:gmailSyncing?"#4b5563":"#60a5fa",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:gmailSyncing?"default":"pointer",letterSpacing:1,minWidth:90}}>
+              {gmailSyncing
+                ? gmailProgress.total > 0
+                  ? `⟳ ${gmailProgress.current}/${gmailProgress.total}`
+                  : "⟳ LOADING…"
+                : "📧 GMAIL"}
             </button>
           )}
           <button onClick={onAdd} style={{background:"#fbbf2415",border:"1px solid #fbbf2440",color:"#fbbf24",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>+ ADD RECEIPT</button>
