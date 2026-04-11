@@ -1289,7 +1289,7 @@ root.render(React.createElement(App));
             })
             .filter(x => x.score < 6)
             .sort((a,b) => a.score - b.score)[0]?.t || null;
-          orders.push({ order, matchedTxn: matched, msgId: msg.id, from, subject });
+          orders.push({ order, matchedTxn: matched, msgId: msg.id, from });
         } else {
           processed.add(msg.id);
         }
@@ -2469,7 +2469,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
       order: o.order, txnId: o.matchedTxn?.id||null, msgId: o.msgId,
       skip: false, later: false, saved: false,
       searching: false, search: "", editing: false,
-      isPending: o.isPending||false, from: o.from||"", subject: o.subject||"",
+      isPending: o.isPending||false, from: o.from||"",
     }))
   );
 
@@ -2565,11 +2565,6 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
                   </div>
                 </div>
 
-                {it.subject && (
-                  <div style={{fontSize:10,color:"#60a5fa",marginTop:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={it.subject}>
-                    {it.subject}
-                  </div>
-                )}
                 {it.editing ? (
                   <div style={{marginTop:8}}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
