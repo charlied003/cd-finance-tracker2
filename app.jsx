@@ -876,6 +876,13 @@ root.render(React.createElement(App));
     setBankSyncing(true);
     try {
       const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
+      const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+      const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+      if (balRes.ok) {
+        const balData = await balRes.json();
+        const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
+        setManualBalances(prev => ({ ...prev, main: liveBal }));
+      }
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
       const since = lastDate
@@ -906,6 +913,13 @@ root.render(React.createElement(App));
         try {
           const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
           console.log("[Starling] account", accountUid, "category", categoryUid);
+          const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+          const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+          if (balRes.ok) {
+            const balData = await balRes.json();
+            const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
+            setManualBalances(prev => ({ ...prev, main: liveBal }));
+          }
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate

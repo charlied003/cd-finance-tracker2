@@ -1019,13 +1019,20 @@ root.render(React.createElement(App));
     }
     function syncStarling() {
       return __async(this, null, function* () {
-        var _a;
+        var _a, _b, _c, _d, _e;
         if (bankSyncing) return;
         setBankSyncing(true);
         try {
           const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken, starlingProxy);
+          const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+          const balRes = yield fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+          if (balRes.ok) {
+            const balData = yield balRes.json();
+            const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
+            setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
+          }
           const existing = transactions.filter((t) => t.accountId === "main");
-          const lastDate = (_a = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _a.date;
+          const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
           const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
           const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
           const existingIds = new Set(transactions.map((t) => t.id));
@@ -1036,9 +1043,9 @@ root.render(React.createElement(App));
           }
           setTransactions(
             (prev) => [...prev, ...fresh].sort((a, b) => {
-              var _a2, _b;
+              var _a2, _b2;
               if (b.date !== a.date) return b.date > a.date ? 1 : -1;
-              return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b = a.rowIndex) != null ? _b : 0);
+              return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
             })
           );
           showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
@@ -1051,7 +1058,7 @@ root.render(React.createElement(App));
     }
     function syncAll() {
       return __async(this, null, function* () {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e, _f, _g;
         if (bankSyncing) return;
         setBankSyncing(true);
         let monzoCount = 0, starlingCount = 0;
@@ -1061,8 +1068,15 @@ root.render(React.createElement(App));
             try {
               const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken, starlingProxy);
               console.log("[Starling] account", accountUid, "category", categoryUid);
+              const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+              const balRes = yield fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+              if (balRes.ok) {
+                const balData = yield balRes.json();
+                const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
+                setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
+              }
               const existing = transactions.filter((t) => t.accountId === "main");
-              const lastDate = (_a = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _a.date;
+              const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
               const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
               console.log("[Starling] fetching since", since);
               const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
@@ -1101,12 +1115,12 @@ root.render(React.createElement(App));
               const token = yield monzoGetValidToken();
               const accId = yield monzoGetAccountId(token);
               const existing = transactions.filter((t) => t.accountId === "grocery" && t.id.startsWith("tx_"));
-              const lastDate = (_b = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _b.date;
+              const lastDate = (_f = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _f.date;
               const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 90 * 24 * 60 * 60 * 1e3).toISOString();
               const balRes = yield fetch(`https://api.monzo.com/balance?account_id=${accId}`, { headers: { Authorization: `Bearer ${token}` } });
               if (balRes.ok) {
                 const balData = yield balRes.json();
-                const liveBal = ((_c = balData.balance) != null ? _c : balData.total_balance) / 100;
+                const liveBal = ((_g = balData.balance) != null ? _g : balData.total_balance) / 100;
                 setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { grocery: liveBal }));
               }
               const raw = yield monzoFetchTransactions(token, accId, since);
