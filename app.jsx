@@ -1529,7 +1529,9 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
   const [addSubOpen, setAddSubOpen]             = useState(false);
-  const [newSub, setNewSub]                     = useState({name:"",amount:"",frequency:"Monthly",note:""});
+  const [subSearch, setSubSearch]               = useState("");
+  const [pendingSub, setPendingSub]             = useState(null); // {name, avgAmount}
+  const [pendingFreq, setPendingFreq]           = useState("Monthly");
 
   // IDs of transactions that are subscription payments — excluded from spending breakdown
   const subTxnIds = computeSubTxnIds(allTransactions, pinnedSubs);
@@ -1548,6 +1550,29 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
     ...pinnedSubsArr.map(p => ({ ...p, pinned: true, lastPaid: null, daysSince: null, daysUntil: null, count: null })),
     ...autoSubs.filter(s => !pinnedNames.has(s.name.toLowerCase())),
   ];
+
+  // Merchants from all transactions not already in a subscription — for the picker
+  const pickerMerchants = (() => {
+    const groups = {};
+    (allTransactions || []).filter(t => t.amount < 0 && !subTxnIds.has(t.id) && !EXCLUDE_FROM_SPEND.includes(t.category||"Other")).forEach(t => {
+      const k = merchantKey(t.description || "");
+      if (!k || k.length < 2) return;
+      if (!groups[k]) groups[k] = { nameCounts:{}, amounts:[], count:0 };
+      const n = t.description || k;
+      groups[k].nameCounts[n] = (groups[k].nameCounts[n]||0)+1;
+      groups[k].amounts.push(Math.abs(t.amount));
+      groups[k].count++;
+    });
+    return Object.entries(groups)
+      .map(([k,g]) => ({
+        key: k,
+        name: Object.entries(g.nameCounts).sort((a,b)=>b[1]-a[1])[0][0],
+        avgAmount: g.amounts.reduce((s,v)=>s+v,0)/g.amounts.length,
+        count: g.count,
+      }))
+      .filter(m => !pinnedNames.has(m.name.toLowerCase()))
+      .sort((a,b) => b.count - a.count);
+  })();
   const ccTotal = visibleTxns.filter(t=>["Fuel","Parking"].includes(t.category)&&t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
 
   function getMerchantBreakdown(cat) {
@@ -1600,32 +1625,63 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
             <div style={{fontSize:10,color:"#a78bfa",letterSpacing:3,textTransform:"uppercase",fontWeight:700}}>Subscriptions ({subs.length})</div>
             <span style={{fontSize:10,color:"#4b5563"}}>{showSubs?"▲":"▼"}</span>
           </div>
-          <button onClick={()=>{setAddSubOpen(v=>!v);setNewSub({name:"",amount:"",frequency:"Monthly",note:""}); }} style={{background:"#1c1f2e",border:"1px solid #a78bfa50",borderRadius:6,color:"#a78bfa",fontSize:11,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
+          <button onClick={()=>{setAddSubOpen(v=>!v);setPendingSub(null);setSubSearch("");}} style={{background:"#1c1f2e",border:"1px solid #a78bfa50",borderRadius:6,color:"#a78bfa",fontSize:11,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
         </div>
         {addSubOpen&&(
           <div style={{background:"#0f1117",border:"1px solid #a78bfa40",borderRadius:10,padding:"12px 14px",marginBottom:8}}>
-            <div style={{fontSize:10,color:"#a78bfa",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>New Subscription</div>
-            <input placeholder="Name (e.g. Netflix)" value={newSub.name} onChange={e=>setNewSub(p=>({...p,name:e.target.value}))}
-              style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,marginBottom:8,fontFamily:"inherit"}} />
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <input placeholder="Amount (£)" value={newSub.amount} onChange={e=>setNewSub(p=>({...p,amount:e.target.value}))} type="number" min="0" step="0.01"
-                style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,fontFamily:"inherit"}} />
-              <select value={newSub.frequency} onChange={e=>setNewSub(p=>({...p,frequency:e.target.value}))}
-                style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,fontFamily:"inherit"}}>
-                {["Weekly","Monthly","Quarterly","Yearly"].map(f=><option key={f}>{f}</option>)}
-              </select>
+            <div style={{fontSize:10,color:"#a78bfa",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>Pick a merchant</div>
+            <input
+              autoFocus
+              placeholder="Search..."
+              value={subSearch}
+              onChange={e=>{setSubSearch(e.target.value);setPendingSub(null);}}
+              style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,marginBottom:8,fontFamily:"inherit",boxSizing:"border-box"}}
+            />
+            <div style={{maxHeight:220,overflowY:"auto",borderRadius:6,border:"1px solid #1c1f2e"}}>
+              {pickerMerchants
+                .filter(m => !subSearch || m.name.toLowerCase().includes(subSearch.toLowerCase()))
+                .slice(0,40)
+                .map(m => {
+                  const selected = pendingSub?.key === m.key;
+                  return (
+                    <div key={m.key}>
+                      <div onClick={()=>{setPendingSub(selected?null:m);setPendingFreq("Monthly");}}
+                        style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",cursor:"pointer",
+                          background:selected?"#a78bfa15":"transparent",borderBottom:"1px solid #1c1f2e"}}>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:700,color:selected?"#a78bfa":"#e2e4ec"}}>{m.name}</div>
+                          <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{m.count} transaction{m.count!==1?"s":""}</div>
+                        </div>
+                        <span style={{fontSize:13,fontWeight:700,color:selected?"#a78bfa":"#94a3b8"}}>{fmt(m.avgAmount)}</span>
+                      </div>
+                      {selected&&(
+                        <div style={{padding:"10px 12px",background:"#0a0b0f",borderBottom:"1px solid #1c1f2e"}}>
+                          <div style={{fontSize:10,color:"#4b5563",marginBottom:6}}>Frequency</div>
+                          <div style={{display:"flex",gap:6,marginBottom:10}}>
+                            {["Weekly","Monthly","Quarterly","Yearly"].map(f=>(
+                              <button key={f} onClick={()=>setPendingFreq(f)}
+                                style={{flex:1,background:pendingFreq===f?"#a78bfa":"#1c1f2e",border:`1px solid ${pendingFreq===f?"#a78bfa":"#2a2d3e"}`,
+                                  color:pendingFreq===f?"#0a0b0f":"#94a3b8",borderRadius:6,padding:"6px 0",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                                {f}
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={()=>{
+                            setPinnedSubs(prev=>[...prev,{name:m.name,amount:parseFloat(m.avgAmount.toFixed(2)),frequency:pendingFreq}]);
+                            setAddSubOpen(false);setPendingSub(null);setSubSearch("");
+                          }} style={{width:"100%",background:"#a78bfa",border:"none",borderRadius:6,color:"#0a0b0f",fontWeight:700,fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>
+                            Pin as subscription
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              {pickerMerchants.filter(m=>!subSearch||m.name.toLowerCase().includes(subSearch.toLowerCase())).length===0&&(
+                <div style={{padding:"16px",fontSize:12,color:"#4b5563",textAlign:"center"}}>No unassigned merchants found</div>
+              )}
             </div>
-            <input placeholder="Note (optional)" value={newSub.note} onChange={e=>setNewSub(p=>({...p,note:e.target.value}))}
-              style={{width:"100%",background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#e2e4ec",padding:"7px 10px",fontSize:13,marginBottom:10,fontFamily:"inherit"}} />
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{
-                const name=newSub.name.trim(); const amt=parseFloat(newSub.amount);
-                if(!name||isNaN(amt)||amt<=0) return;
-                setPinnedSubs(prev=>[...prev,{name,amount:amt,frequency:newSub.frequency,note:newSub.note.trim()}]);
-                setAddSubOpen(false);
-              }} style={{flex:1,background:"#a78bfa",border:"none",borderRadius:6,color:"#0a0b0f",fontWeight:700,fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>Save</button>
-              <button onClick={()=>setAddSubOpen(false)} style={{flex:1,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#94a3b8",fontSize:13,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-            </div>
+            <button onClick={()=>{setAddSubOpen(false);setPendingSub(null);setSubSearch("");}} style={{width:"100%",marginTop:8,background:"#1c1f2e",border:"1px solid #2a2d3e",borderRadius:6,color:"#94a3b8",fontSize:12,padding:"8px",cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         )}
         {showSubs&&subs.length>0&&(
