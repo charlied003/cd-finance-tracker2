@@ -309,6 +309,7 @@ function matchReceiptToTransaction(extracted, transactions) {
 const MONZO_CONFIG_KEY    = "finance-tracker-monzo-config";
 const STARLING_TOKEN_KEY  = "finance-tracker-starling-token";
 const STARLING_PROXY_KEY  = "finance-tracker-starling-proxy";
+const MERCHANT_LOGOS_KEY  = "finance-tracker-merchant-logos";
 const DEV_SERVICES_KEY    = "finance-tracker-dev-services";
 const AI_SCAN_COUNT_KEY   = "finance-tracker-ai-scans";
 const MONZO_ACCESS_KEY    = "finance-tracker-monzo-access";
@@ -475,6 +476,48 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
+// Fetch a logo URL for a Starling merchant UID.
+// Tries the merchant API for a direct logo, then falls back to Clearbit via the merchant's website.
+async function starlingFetchMerchantLogo(merchantUid, token, proxyBase) {
+  const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+  try {
+    const res = await fetch(`${base}/merchant/${merchantUid}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const m = j.merchant || j;
+    if (m.logo) return m.logo;
+    if (m.website) {
+      try {
+        const url = m.website.startsWith("http") ? m.website : `https://${m.website}`;
+        const domain = new URL(url).hostname.replace(/^www\./, "");
+        return `https://logo.clearbit.com/${domain}`;
+      } catch { return null; }
+    }
+  } catch {}
+  return null;
+}
+
+// After a Starling sync, fetch logos for newly-seen merchants not already in the cache.
+async function fetchNewStarlingLogos(fresh, token, proxyBase, existingLogos) {
+  const seen = new Map();
+  fresh.forEach(t => {
+    if (t.counterPartyType === "MERCHANT" && t.merchantUid) {
+      const k = merchantKey(t.description || "");
+      if (!existingLogos[k] && !seen.has(t.merchantUid)) seen.set(t.merchantUid, k);
+    }
+  });
+  if (!seen.size) return {};
+  const entries = [...seen.entries()];
+  const results = await Promise.allSettled(
+    entries.map(async ([uid, k]) => ({ k, logo: await starlingFetchMerchantLogo(uid, token, proxyBase) }))
+  );
+  const out = {};
+  results.forEach(r => { if (r.status === "fulfilled" && r.value.logo) out[r.value.k] = r.value.logo; });
+  return out;
+}
+
 function starlingToInternal(item, idx) {
   const minorUnits = item.amount?.minorUnits || 0;
   if (minorUnits === 0) return null;
@@ -506,6 +549,8 @@ function starlingToInternal(item, idx) {
     category: resolvedCat,
     nativeCategory: resolvedCat,
     nativeTransferType,
+    merchantUid: item.counterPartyUid || null,
+    counterPartyType: item.counterPartyType || null,
   };
 }
 
@@ -730,6 +775,7 @@ export default function App() {
   const [gmailSyncing, setGmailSyncing]     = useState(false);
   const [gmailProgress, setGmailProgress]   = useState({ current: 0, total: 0 });
   const [senderMap, setSenderMap]           = useState(() => { try { return JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}"); } catch { return {}; } });
+  const [merchantLogos, setMerchantLogos]   = useState(() => { try { return JSON.parse(localStorage.getItem(MERCHANT_LOGOS_KEY)||"{}"); } catch { return {}; } });
   const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
     try {
@@ -868,6 +914,10 @@ const DEFAULT_RULES = {
   useEffect(() => {
     try { localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap)); } catch {}
   }, [senderMap]);
+
+  useEffect(() => {
+    try { localStorage.setItem(MERCHANT_LOGOS_KEY, JSON.stringify(merchantLogos)); } catch {}
+  }, [merchantLogos]);
 
   // Debounced Gist sync — fires 2s after any change to syncable data
   useEffect(() => {
@@ -1112,6 +1162,10 @@ root.render(React.createElement(App));
         [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
       );
       showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
+      // Fetch merchant logos for newly-seen merchants (non-blocking)
+      fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then(newLogos => {
+        if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
+      });
     } catch(e) {
       showToast(e.message, "error");
     } finally {
@@ -1160,6 +1214,10 @@ root.render(React.createElement(App));
               setTransactions(prev =>
                 [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
               );
+              // Fetch merchant logos for newly-seen merchants (non-blocking)
+              fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then(newLogos => {
+                if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
+              });
             }
           }
         } catch(e) {
@@ -1414,7 +1472,7 @@ root.render(React.createElement(App));
               setComparePeriod={setComparePeriod} visibleTxns={visibleTxns} compareTxns={compareTxns} periodLabel={periodLabel}
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})}
               allTransactions={applyRules(transactions.filter(t => activeAccounts.includes(t.accountId)))}
-              pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} />}
+              pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} merchantLogos={merchantLogos} />}
             {view==="transactions" && <TxList
               txns={visibleTxns} accounts={accounts}
               onCatChange={(id,cat)=>setTransactions(prev=>prev.map(t=>t.id===id?{...t,category:cat}:t))}
@@ -1961,15 +2019,15 @@ function spendFromTxns(txns) {
 }
 
 // ─── Spend View ───────────────────────────────────────────────────────────────
-function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
+function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs,merchantLogos}) {
   const pseudo = useContext(PseudoCtx);
   const merchantLogoMap = useMemo(() => {
-    const map = {};
+    const map = { ...(merchantLogos||{}) }; // Starling logos keyed by merchantKey
     (allTransactions||[]).forEach(t => {
-      if (t.logo) { const k = merchantKey(t.description||""); if (!map[k]) map[k] = t.logo; }
+      if (t.logo) { const k = merchantKey(t.description||""); if (!map[k]) map[k] = t.logo; } // Monzo logos
     });
     return map;
-  }, [allTransactions]);
+  }, [allTransactions, merchantLogos]);
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
