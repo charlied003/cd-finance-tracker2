@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.22</title>
+<title>Finance Tracker v3.23</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.22";
+  const APP_VERSION = "3.23";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -416,7 +416,7 @@ amount = price per single item.` }
   const MONZO_CONFIG_KEY = "finance-tracker-monzo-config";
   const STARLING_TOKEN_KEY = "finance-tracker-starling-token";
   const STARLING_PROXY_KEY = "finance-tracker-starling-proxy";
-  const MERCHANT_LOGOS_KEY = "finance-tracker-merchant-logos";
+  const MERCHANT_LOGOS_KEY = "finance-tracker-merchant-logos-v2";
   const DEV_SERVICES_KEY = "finance-tracker-dev-services";
   const AI_SCAN_COUNT_KEY = "finance-tracker-ai-scans";
   const MONZO_ACCESS_KEY = "finance-tracker-monzo-access";
@@ -1149,7 +1149,7 @@ ${clean}` }]
     }, [merchantLogos]);
     useEffect(() => {
       if (!starlingToken || !transactions.length) return;
-      const starlingTxns = transactions.filter((t) => t.accountId === "main");
+      const starlingTxns = applyRules(transactions.filter((t) => t.accountId === "main"));
       const uncached = [];
       const seen = /* @__PURE__ */ new Set();
       for (const t of starlingTxns) {
@@ -1434,7 +1434,7 @@ root.render(React.createElement(App));
             })
           );
           showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-          fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
+          fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
             if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
           });
         } catch (e) {
@@ -1489,7 +1489,7 @@ root.render(React.createElement(App));
                       return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
                     })
                   );
-                  fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
+                  fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
                     if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
                   });
                 }

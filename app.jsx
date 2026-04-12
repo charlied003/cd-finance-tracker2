@@ -313,7 +313,7 @@ function matchReceiptToTransaction(extracted, transactions) {
 const MONZO_CONFIG_KEY    = "finance-tracker-monzo-config";
 const STARLING_TOKEN_KEY  = "finance-tracker-starling-token";
 const STARLING_PROXY_KEY  = "finance-tracker-starling-proxy";
-const MERCHANT_LOGOS_KEY  = "finance-tracker-merchant-logos";
+const MERCHANT_LOGOS_KEY  = "finance-tracker-merchant-logos-v2"; // v2: keyed by display name, not raw description
 const DEV_SERVICES_KEY    = "finance-tracker-dev-services";
 const AI_SCAN_COUNT_KEY   = "finance-tracker-ai-scans";
 const MONZO_ACCESS_KEY    = "finance-tracker-monzo-access";
@@ -944,9 +944,10 @@ const DEFAULT_RULES = {
 
   // Background logo enrichment: on load, fetch logos for existing Starling transactions
   // not yet in the cache. Runs once when transactions + token are ready. Capped at 40 merchants.
+  // Uses applyRules so keys match the display names shown in the spending tab.
   useEffect(() => {
     if (!starlingToken || !transactions.length) return;
-    const starlingTxns = transactions.filter(t => t.accountId === "main");
+    const starlingTxns = applyRules(transactions.filter(t => t.accountId === "main"));
     const uncached = [];
     const seen = new Set();
     for (const t of starlingTxns) {
@@ -1204,8 +1205,8 @@ root.render(React.createElement(App));
         [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
       );
       showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-      // Fetch merchant logos for newly-seen merchants (non-blocking)
-      fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then(newLogos => {
+      // Fetch merchant logos — apply rules first so keys match display names in spending tab
+      fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then(newLogos => {
         if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
       });
     } catch(e) {
@@ -1256,8 +1257,8 @@ root.render(React.createElement(App));
               setTransactions(prev =>
                 [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
               );
-              // Fetch merchant logos for newly-seen merchants (non-blocking)
-              fetchNewStarlingLogos(fresh, starlingToken, starlingProxy, merchantLogos).then(newLogos => {
+              // Fetch merchant logos — apply rules first so keys match display names in spending tab
+              fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then(newLogos => {
                 if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
               });
             }
