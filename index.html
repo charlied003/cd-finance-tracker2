@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.21</title>
+<title>Finance Tracker v3.22</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.21";
+  const APP_VERSION = "3.22";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -601,50 +601,60 @@ amount = price per single item.` }
       return j.feedItems || [];
     });
   }
-  function starlingFetchMerchantLogo(merchantUid, token, proxyBase) {
+  function merchantNameToLogoUrl(name) {
+    if (!name) return null;
+    const lower = name.toLowerCase().trim();
+    const firstToken = lower.split(/\s+/)[0];
+    if (/^[a-z0-9][a-z0-9-]+\.[a-z]{2,}(\.[a-z]{2})?$/.test(firstToken))
+      return `https://logo.clearbit.com/${firstToken}`;
+    const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
+    return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
+  }
+  function starlingFetchMerchantLogo(merchantUid, token, proxyBase, nameFallback) {
     return __async(this, null, function* () {
       const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
       try {
         const res = yield fetch(`${base}/merchant/${merchantUid}`, {
           headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
         });
-        if (!res.ok) return null;
-        const j = yield res.json();
-        const m = j.merchant || j;
-        if (m.logo) return m.logo;
-        if (m.website) {
-          try {
-            const url = m.website.startsWith("http") ? m.website : `https://${m.website}`;
-            const domain = new URL(url).hostname.replace(/^www\./, "");
-            return `https://logo.clearbit.com/${domain}`;
-          } catch (e) {
-            return null;
+        if (res.ok) {
+          const j = yield res.json();
+          const m = j.merchant || j;
+          if (m.logo) return m.logo;
+          if (m.website) {
+            try {
+              const url = m.website.startsWith("http") ? m.website : `https://${m.website}`;
+              const domain = new URL(url).hostname.replace(/^www\./, "");
+              return `https://logo.clearbit.com/${domain}`;
+            } catch (e) {
+            }
           }
         }
       } catch (e) {
       }
-      return null;
+      return nameFallback ? merchantNameToLogoUrl(nameFallback) : null;
     });
   }
-  function fetchNewStarlingLogos(fresh, token, proxyBase, existingLogos) {
+  function fetchNewStarlingLogos(txns, token, proxyBase, existingLogos) {
     return __async(this, null, function* () {
-      const seen = /* @__PURE__ */ new Map();
-      fresh.forEach((t) => {
-        if (t.counterPartyType === "MERCHANT" && t.merchantUid) {
-          const k = merchantKey(t.description || "");
-          if (!existingLogos[k] && !seen.has(t.merchantUid)) seen.set(t.merchantUid, k);
-        }
+      const withUid = /* @__PURE__ */ new Map();
+      const nameOnly = /* @__PURE__ */ new Map();
+      txns.forEach((t) => {
+        const k = merchantKey(t.description || "");
+        if (existingLogos[k]) return;
+        if (t.merchantUid && !withUid.has(t.merchantUid)) withUid.set(t.merchantUid, { k, name: t.description });
+        else if (!t.merchantUid && !nameOnly.has(k)) nameOnly.set(k, t.description);
       });
-      if (!seen.size) return {};
-      const entries = [...seen.entries()];
-      const results = yield Promise.allSettled(
-        entries.map((_0) => __async(null, [_0], function* ([uid2, k]) {
-          return { k, logo: yield starlingFetchMerchantLogo(uid2, token, proxyBase) };
-        }))
-      );
       const out = {};
-      results.forEach((r) => {
-        if (r.status === "fulfilled" && r.value.logo) out[r.value.k] = r.value.logo;
+      yield Promise.allSettled([...withUid.entries()].map((_0) => __async(null, [_0], function* ([uid2, { k, name }]) {
+        const logo = yield starlingFetchMerchantLogo(uid2, token, proxyBase, name);
+        if (logo) out[k] = logo;
+      })));
+      nameOnly.forEach((name, k) => {
+        if (!out[k]) {
+          const u = merchantNameToLogoUrl(name);
+          if (u) out[k] = u;
+        }
       });
       return out;
     });
@@ -1137,6 +1147,24 @@ ${clean}` }]
       } catch (e) {
       }
     }, [merchantLogos]);
+    useEffect(() => {
+      if (!starlingToken || !transactions.length) return;
+      const starlingTxns = transactions.filter((t) => t.accountId === "main");
+      const uncached = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const t of starlingTxns) {
+        const k = merchantKey(t.description || "");
+        if (!merchantLogos[k] && !seen.has(k)) {
+          seen.add(k);
+          uncached.push(t);
+        }
+        if (uncached.length >= 40) break;
+      }
+      if (!uncached.length) return;
+      fetchNewStarlingLogos(uncached, starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
+        if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
+      });
+    }, [starlingToken, transactions.length]);
     useEffect(() => {
       if (!syncReady.current || !gistToken) return;
       setSyncStatus("syncing");
