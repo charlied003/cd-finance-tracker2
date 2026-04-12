@@ -11,15 +11,17 @@ const ACCOUNTS_DEFAULT = [
 
 const CATEGORIES = [
   "Groceries","Fuel","Parking","Eating Out","Takeaway","Subscriptions",
-  "Clothing","Health","Home","Transport","Entertainment","Savings","SavingsReturn","Transfer","Other"
+  "Online Shopping","Gym/Supplements","Clothing","Health","Home","Entertainment",
+  "Savings","SavingsReturn","Transfer","Other"
 ];
 
 const CAT_COLORS = {
-  Groceries:"#4ade80",  Fuel:"#fb923c",       Parking:"#fbbf24",
-  "Eating Out":"#f472b6", Takeaway:"#e879f9", Subscriptions:"#60a5fa",
-  Clothing:"#a78bfa",   Health:"#34d399",     Home:"#38bdf8",
-  Transport:"#94a3b8",  Entertainment:"#f87171",
-  Savings:"#fde68a",    SavingsReturn:"#4ade80", Transfer:"#6b7280", Other:"#4b5563",
+  Groceries:"#4ade80",        Fuel:"#fb923c",           Parking:"#fbbf24",
+  "Eating Out":"#f472b6",     Takeaway:"#e879f9",       Subscriptions:"#60a5fa",
+  "Online Shopping":"#06b6d4", "Gym/Supplements":"#84cc16",
+  Clothing:"#a78bfa",         Health:"#34d399",         Home:"#38bdf8",
+  Entertainment:"#f87171",
+  Savings:"#fde68a",          SavingsReturn:"#4ade80",  Transfer:"#6b7280", Other:"#4b5563",
 };
 
 const APP_VERSION = "__APP_VERSION__";
@@ -102,19 +104,21 @@ function guessCategory(desc) {
   if (/restaurant|cafe|coffee|starbucks|mcdonalds|mcdonald|kfc|burger|pizza|subway|nando/.test(d)) return "Eating Out";
   if (/just eat|deliveroo|uber eat|takeaway/.test(d))                  return "Takeaway";
   if (/netflix|spotify|amazon prime|disney|apple|subscription/.test(d)) return "Subscriptions";
+  if (/amazon|asos|ebay|etsy|boohoo|next\.co|very\.co|shein|zalando|prettylittlething|missguided|novagroup/.test(d)) return "Online Shopping";
+  if (/gym|puregym|myprotein|protein|supplement|fitness|anytime fitness|david lloyd|virgin active|leisure centre|swimming/.test(d)) return "Gym/Supplements";
   if (/savings|save|isa/.test(d))                                      return "Savings";
   if (/transfer|trf|tfr|sent to|received from|payment to/.test(d))    return "Transfer";
   if (/health|pharmacy|boots|chemist|doctor|dentist/.test(d))         return "Health";
-  if (/clothing|h&m|zara|primark|next|tk maxx/.test(d))               return "Clothing";
+  if (/clothing|h&m|zara|primark|tk maxx/.test(d))                    return "Clothing";
   return "Other";
 }
 
 // ─── Monzo Category Map ───────────────────────────────────────────────────────
 
 const MONZO_CAT_MAP = {
-  "groceries":"Groceries","eating out":"Eating Out","transport":"Transport",
+  "groceries":"Groceries","eating out":"Eating Out","transport":"Other",
   "fuel":"Fuel","parking":"Parking","entertainment":"Entertainment",
-  "shopping":"Clothing","health":"Health","bills":"Subscriptions",
+  "shopping":"Online Shopping","health":"Health","bills":"Subscriptions",
   "savings":"Savings","transfers":"Transfer","personal care":"Health",
   "holidays":"Entertainment","family":"Other","general":"Other",
   "finances":"Transfer","cash":"Other",
@@ -123,9 +127,9 @@ const MONZO_CAT_MAP = {
 // ─── Starling Category Map ────────────────────────────────────────────────────
 
 const STARLING_CAT_MAP = {
-  "groceries":"Groceries","eating out":"Eating Out","transport":"Transport",
+  "groceries":"Groceries","eating out":"Eating Out","transport":"Other",
   "fuel":"Fuel","parking":"Parking","entertainment":"Entertainment",
-  "shopping":"Clothing","health":"Health","bills":"Subscriptions",
+  "shopping":"Online Shopping","health":"Health","bills":"Subscriptions",
   "income":"Transfer","savings":"Savings","general":"Other",
 };
 
