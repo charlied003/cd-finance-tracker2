@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useContext } from "react";
+import { useState, useEffect, useRef, useContext, useMemo } from "react";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -446,6 +446,7 @@ function monzoToInternal(tx, idx) {
     category:  cat,
     nativeCategory: cat,
     nativeTransferType: tx.category === "transfers" ? "neutral" : null,
+    logo: tx.merchant?.logo || null,
   };
 }
 
@@ -1277,16 +1278,17 @@ root.render(React.createElement(App));
         let full;
         try { full = await gmailGetMessage(token, msg.id); }
         catch(e) { showToast(`Fetch message failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
-        const hdrs    = full.payload?.headers || [];
-        const subject = hdrs.find(h=>h.name==="Subject")?.value || "";
-        const from    = hdrs.find(h=>h.name==="From")?.value || "";
-        const body    = gmailDecodeBody(full.payload);
+        const hdrs      = full.payload?.headers || [];
+        const subject   = hdrs.find(h=>h.name==="Subject")?.value || "";
+        const from      = hdrs.find(h=>h.name==="From")?.value || "";
+        const emailDate = full.internalDate ? new Date(parseInt(full.internalDate)).toISOString().slice(0,10) : "";
+        const body      = gmailDecodeBody(full.payload);
         // AI extraction
         let order;
         try { order = await extractOrderFromEmail(subject, from, body, apiKey); }
         catch(e) { showToast(`AI extraction failed: ${e.message}`, "error"); setGmailSyncing(false); setGmailProgress({current:0,total:0}); return; }
         if (order) {
-          const oDate = new Date(order.orderDate || todayStr());
+          const oDate = new Date(order.orderDate || emailDate || todayStr());
           const senderEmail = (from.match(/<(.+)>/)?.[1] || from).toLowerCase();
           const knownDesc = senderMap[senderEmail] || "";
           const matched = [...transactions]
@@ -1300,7 +1302,7 @@ root.render(React.createElement(App));
             })
             .filter(x => x.score < 6)
             .sort((a,b) => a.score - b.score)[0]?.t || null;
-          orders.push({ order, matchedTxn: matched, msgId: msg.id, from, subject });
+          orders.push({ order, matchedTxn: matched, msgId: msg.id, from, subject, emailDate });
         } else {
           processed.add(msg.id);
         }
@@ -1309,7 +1311,7 @@ root.render(React.createElement(App));
       localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
       // Load pending items saved for later, prepend to results
       const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
-      const pendingOrders = pending.map(p => ({ order:p.order, matchedTxn:null, msgId:p.msgId, isPending:true, from:p.from||"" }));
+      const pendingOrders = pending.map(p => ({ order:p.order, matchedTxn:null, msgId:p.msgId, isPending:true, from:p.from||"", emailDate:p.emailDate||"", subject:p.subject||"" }));
       // Sort: 0-value orders sink to bottom within each group
       const sortByValue = arr => [...arr].sort((a,b) => {
         const aZero = !a.order.orderTotal; const bZero = !b.order.orderTotal;
@@ -1603,7 +1605,7 @@ root.render(React.createElement(App));
         }}
         onSaveLater={(item) => {
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY)||"[]");
-          const updated = [...pending.filter(p=>p.msgId!==item.msgId), {order:item.order, msgId:item.msgId, from:item.from||""}];
+          const updated = [...pending.filter(p=>p.msgId!==item.msgId), {order:item.order, msgId:item.msgId, from:item.from||"", subject:item.subject||"", emailDate:item.emailDate||""}];
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(updated));
           showToast("Saved for later");
         }}
@@ -1961,6 +1963,13 @@ function spendFromTxns(txns) {
 // ─── Spend View ───────────────────────────────────────────────────────────────
 function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
   const pseudo = useContext(PseudoCtx);
+  const merchantLogoMap = useMemo(() => {
+    const map = {};
+    (allTransactions||[]).forEach(t => {
+      if (t.logo) { const k = merchantKey(t.description||""); if (!map[k]) map[k] = t.logo; }
+    });
+    return map;
+  }, [allTransactions]);
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
@@ -2235,6 +2244,9 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                       <div key={merchant} style={{borderBottom:i<merchants.length-1?"1px solid #1c1f2e":"none"}}>
                         <div onClick={()=>setExpandedMerchant(isMOpen?null:mKey)}
                           style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 14px 8px 28px",cursor:"pointer",background:isMOpen?"#111318":"transparent"}}>
+                          {merchantLogoMap[merchantKey(merchant)] && !pseudo.on && (
+                            <img src={merchantLogoMap[merchantKey(merchant)]} alt="" style={{width:18,height:18,borderRadius:3,objectFit:"contain",flexShrink:0}} onError={e=>{e.target.style.display="none"}}/>
+                          )}
                           <span style={{fontSize:12,color:isMOpen?"#e2e4ec":"#94a3b8",fontWeight:isMOpen?700:400,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{pName(merchant,pseudo)}</span>
                           <span style={{fontSize:13,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8",flexShrink:0,marginRight:6}}>{fmt(pAmt(total,pseudo))}</span>
                           <span style={{fontSize:10,color:"#4b5563"}}>{isMOpen?"▲":"▼"}</span>
@@ -2541,7 +2553,7 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
       order: o.order, txnId: o.matchedTxn?.id||null, msgId: o.msgId,
       skip: false, later: false, saved: false,
       searching: false, search: "", editing: false,
-      isPending: o.isPending||false, from: o.from||"", subject: o.subject||"",
+      isPending: o.isPending||false, from: o.from||"", subject: o.subject||"", emailDate: o.emailDate||"",
     }))
   );
 
@@ -2638,11 +2650,16 @@ function GmailScanModal({orders, transactions, onConfirm, onClose, onSaveOne, on
                   </div>
                 </div>
 
-                {it.subject && (
-                  <div style={{fontSize:10,color:"#60a5fa",marginTop:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={it.subject}>
-                    {it.subject}
-                  </div>
-                )}
+                <div style={{display:"flex",gap:10,alignItems:"center",marginTop:3,minWidth:0}}>
+                  {it.subject && (
+                    <div style={{fontSize:10,color:"#60a5fa",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}} title={it.subject}>
+                      {it.subject}
+                    </div>
+                  )}
+                  {it.emailDate && (
+                    <div style={{fontSize:10,color:"#4b5563",flexShrink:0}}>📅 {it.emailDate}</div>
+                  )}
+                </div>
                 {it.editing ? (
                   <div style={{marginTop:8}}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>

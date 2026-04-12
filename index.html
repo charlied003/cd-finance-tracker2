@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.18</title>
+<title>Finance Tracker v3.19</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -60,7 +60,7 @@ input,textarea,button{font-family:inherit;}
       step((generator = generator.apply(__this, __arguments)).next());
     });
   };
-  const { useState, useEffect, useRef, useContext } = React;
+  const { useState, useEffect, useRef, useContext, useMemo } = React;
   const ACCOUNTS_DEFAULT = [
     { id: "main", name: "Main Account", type: "current", color: "#60a5fa", icon: "\u{1F3E6}" },
     { id: "grocery", name: "Grocery Account", type: "current", color: "#4ade80", icon: "\u{1F6D2}" },
@@ -101,7 +101,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.18";
+  const APP_VERSION = "3.19";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -553,7 +553,7 @@ amount = price per single item.` }
     });
   }
   function monzoToInternal(tx, idx) {
-    var _a;
+    var _a, _b;
     const amount = tx.amount / 100;
     if (amount === 0) return null;
     const cat = MONZO_CAT_MAP[(tx.category || "").toLowerCase()] || "Other";
@@ -567,7 +567,8 @@ amount = price per single item.` }
       balance: null,
       category: cat,
       nativeCategory: cat,
-      nativeTransferType: tx.category === "transfers" ? "neutral" : null
+      nativeTransferType: tx.category === "transfers" ? "neutral" : null,
+      logo: ((_b = tx.merchant) == null ? void 0 : _b.logo) || null
     };
   }
   function starlingGetAccount(token, proxyBase) {
@@ -1543,6 +1544,7 @@ root.render(React.createElement(App));
             const hdrs = ((_a = full.payload) == null ? void 0 : _a.headers) || [];
             const subject = ((_b = hdrs.find((h) => h.name === "Subject")) == null ? void 0 : _b.value) || "";
             const from = ((_c = hdrs.find((h) => h.name === "From")) == null ? void 0 : _c.value) || "";
+            const emailDate = full.internalDate ? new Date(parseInt(full.internalDate)).toISOString().slice(0, 10) : "";
             const body = gmailDecodeBody(full.payload);
             let order;
             try {
@@ -1554,7 +1556,7 @@ root.render(React.createElement(App));
               return;
             }
             if (order) {
-              const oDate = new Date(order.orderDate || todayStr());
+              const oDate = new Date(order.orderDate || emailDate || todayStr());
               const senderEmail = (((_d = from.match(/<(.+)>/)) == null ? void 0 : _d[1]) || from).toLowerCase();
               const knownDesc = senderMap[senderEmail] || "";
               const matched = ((_e = [...transactions].filter((t) => t.amount < 0).map((t) => {
@@ -1564,7 +1566,7 @@ root.render(React.createElement(App));
                 const senderBoost = knownDesc && ((_a2 = t.description) == null ? void 0 : _a2.toLowerCase().includes(knownDesc.toLowerCase())) ? -2 : 0;
                 return { t, score: days * 0.3 + amtPct * 10 + senderBoost };
               }).filter((x) => x.score < 6).sort((a, b) => a.score - b.score)[0]) == null ? void 0 : _e.t) || null;
-              orders.push({ order, matchedTxn: matched, msgId: msg.id, from, subject });
+              orders.push({ order, matchedTxn: matched, msgId: msg.id, from, subject, emailDate });
             } else {
               processed.add(msg.id);
             }
@@ -1572,7 +1574,7 @@ root.render(React.createElement(App));
           setGmailProgress({ current: 0, total: 0 });
           localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify([...processed]));
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY) || "[]");
-          const pendingOrders = pending.map((p) => ({ order: p.order, matchedTxn: null, msgId: p.msgId, isPending: true, from: p.from || "" }));
+          const pendingOrders = pending.map((p) => ({ order: p.order, matchedTxn: null, msgId: p.msgId, isPending: true, from: p.from || "", emailDate: p.emailDate || "", subject: p.subject || "" }));
           const sortByValue = (arr) => [...arr].sort((a, b) => {
             const aZero = !a.order.orderTotal;
             const bZero = !b.order.orderTotal;
@@ -2024,7 +2026,7 @@ root.render(React.createElement(App));
         },
         onSaveLater: (item) => {
           const pending = JSON.parse(localStorage.getItem(GMAIL_PENDING_KEY) || "[]");
-          const updated = [...pending.filter((p) => p.msgId !== item.msgId), { order: item.order, msgId: item.msgId, from: item.from || "" }];
+          const updated = [...pending.filter((p) => p.msgId !== item.msgId), { order: item.order, msgId: item.msgId, from: item.from || "", subject: item.subject || "", emailDate: item.emailDate || "" }];
           localStorage.setItem(GMAIL_PENDING_KEY, JSON.stringify(updated));
           showToast("Saved for later");
         },
@@ -2208,6 +2210,16 @@ root.render(React.createElement(App));
   }
   function SpendView({ spending, compareSpend, totalSpend, displayPeriod, comparePeriod, visibleTxns, compareTxns, periodLabel, receipts, onAddReceipt, allTransactions, pinnedSubs, setPinnedSubs }) {
     const pseudo = useContext(PseudoCtx);
+    const merchantLogoMap = useMemo(() => {
+      const map = {};
+      (allTransactions || []).forEach((t) => {
+        if (t.logo) {
+          const k = merchantKey(t.description || "");
+          if (!map[k]) map[k] = t.logo;
+        }
+      });
+      return map;
+    }, [allTransactions]);
     const [expandedCat, setExpandedCat] = useState(null);
     const [expandedMerchant, setExpandedMerchant] = useState(null);
     const [showSubs, setShowSubs] = useState(true);
@@ -2430,6 +2442,9 @@ root.render(React.createElement(App));
             onClick: () => setExpandedMerchant(isMOpen ? null : mKey),
             style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px 8px 28px", cursor: "pointer", background: isMOpen ? "#111318" : "transparent" }
           },
+          merchantLogoMap[merchantKey(merchant)] && !pseudo.on && /* @__PURE__ */ React.createElement("img", { src: merchantLogoMap[merchantKey(merchant)], alt: "", style: { width: 18, height: 18, borderRadius: 3, objectFit: "contain", flexShrink: 0 }, onError: (e) => {
+            e.target.style.display = "none";
+          } }),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: isMOpen ? "#e2e4ec" : "#94a3b8", fontWeight: isMOpen ? 700 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 } }, pName(merchant, pseudo)),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: CAT_COLORS[cat] || "#94a3b8", flexShrink: 0, marginRight: 6 } }, fmt(pAmt(total, pseudo))),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, isMOpen ? "\u25B2" : "\u25BC")
@@ -2591,7 +2606,8 @@ root.render(React.createElement(App));
           editing: false,
           isPending: o.isPending || false,
           from: o.from || "",
-          subject: o.subject || ""
+          subject: o.subject || "",
+          emailDate: o.emailDate || ""
         };
       })
     );
@@ -2629,7 +2645,7 @@ root.render(React.createElement(App));
       const orderTotal = it.order.orderTotal || 0;
       const balanceDiff = orderTotal ? Math.abs(itemsTotal - orderTotal) : 0;
       const borderColor = it.saved ? "#4ade80" : it.later ? "#fbbf2460" : it.skip ? "#1c1f2e" : it.txnId ? "#4ade8040" : "#f8717130";
-      return /* @__PURE__ */ React.createElement("div", { key: i, style: { background: it.skip || it.later ? "#0a0b0f" : "#111318", border: `1px solid ${borderColor}`, borderRadius: 10, marginBottom: 10, overflow: "hidden", opacity: it.skip || it.saved ? 0.45 : 1 } }, (it.isPending || it.saved || it.later) && /* @__PURE__ */ React.createElement("div", { style: { padding: "3px 14px", background: it.saved ? "#4ade8018" : it.later ? "#fbbf2418" : "#fbbf2410", borderBottom: "1px solid #1c1f2e", fontSize: 9, fontWeight: 700, letterSpacing: 1, color: it.saved ? "#4ade80" : it.later ? "#fbbf24" : "#fbbf24" } }, it.saved ? "\u2713 SAVED" : it.later ? "\u23F8 SAVED FOR LATER" : "\u23F8 PENDING REVIEW"), /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px", borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, it.order.storeName || "Unknown store"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "#94a3b8" } }, it.order.orderTotal ? fmt(it.order.orderTotal) : ""), !it.saved && !it.skip && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { editing: !it.editing }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: it.editing ? "#60a5fa" : "#4b5563", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, it.editing ? "done" : "edit"), !it.saved && it.txnId && /* @__PURE__ */ React.createElement("button", { onClick: () => handleSaveOne(i), style: { background: "#4ade8020", border: "1px solid #4ade8060", borderRadius: 6, color: "#4ade80", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit", fontWeight: 700 } }, "save"), !it.later && /* @__PURE__ */ React.createElement("button", { onClick: () => handleLater(i), style: { background: "#fbbf2410", border: "1px solid #fbbf2440", borderRadius: 6, color: "#fbbf24", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "later"), /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { skip: !it.skip, later: false, editing: false }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: "#4b5563", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "skip")), (it.skip || it.later || it.saved) && /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { skip: false, later: false, saved: false }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: "#60a5fa", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "undo"))), it.subject && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: it.subject }, it.subject), it.editing ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement(
+      return /* @__PURE__ */ React.createElement("div", { key: i, style: { background: it.skip || it.later ? "#0a0b0f" : "#111318", border: `1px solid ${borderColor}`, borderRadius: 10, marginBottom: 10, overflow: "hidden", opacity: it.skip || it.saved ? 0.45 : 1 } }, (it.isPending || it.saved || it.later) && /* @__PURE__ */ React.createElement("div", { style: { padding: "3px 14px", background: it.saved ? "#4ade8018" : it.later ? "#fbbf2418" : "#fbbf2410", borderBottom: "1px solid #1c1f2e", fontSize: 9, fontWeight: 700, letterSpacing: 1, color: it.saved ? "#4ade80" : it.later ? "#fbbf24" : "#fbbf24" } }, it.saved ? "\u2713 SAVED" : it.later ? "\u23F8 SAVED FOR LATER" : "\u23F8 PENDING REVIEW"), /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px", borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 13 } }, it.order.storeName || "Unknown store"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "#94a3b8" } }, it.order.orderTotal ? fmt(it.order.orderTotal) : ""), !it.saved && !it.skip && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { editing: !it.editing }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: it.editing ? "#60a5fa" : "#4b5563", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, it.editing ? "done" : "edit"), !it.saved && it.txnId && /* @__PURE__ */ React.createElement("button", { onClick: () => handleSaveOne(i), style: { background: "#4ade8020", border: "1px solid #4ade8060", borderRadius: 6, color: "#4ade80", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit", fontWeight: 700 } }, "save"), !it.later && /* @__PURE__ */ React.createElement("button", { onClick: () => handleLater(i), style: { background: "#fbbf2410", border: "1px solid #fbbf2440", borderRadius: 6, color: "#fbbf24", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "later"), /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { skip: !it.skip, later: false, editing: false }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: "#4b5563", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "skip")), (it.skip || it.later || it.saved) && /* @__PURE__ */ React.createElement("button", { onClick: () => update(i, { skip: false, later: false, saved: false }), style: { background: "none", border: "1px solid #2a2d3a", borderRadius: 6, color: "#60a5fa", fontSize: 10, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" } }, "undo"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", marginTop: 3, minWidth: 0 } }, it.subject && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }, title: it.subject }, it.subject), it.emailDate && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", flexShrink: 0 } }, "\u{1F4C5} ", it.emailDate)), it.editing ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } }, /* @__PURE__ */ React.createElement(
         "input",
         {
           value: it.order.storeName || "",
