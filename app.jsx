@@ -474,9 +474,7 @@ async function starlingGetAccount(token, proxyBase) {
   const all = j.accounts || [];
   const acc = all.find(a => a.accountType === "PRIMARY");
   if (!acc) throw new Error("No primary Starling account found");
-  // Easy Saver is a separate Starling account (not a savings goal), appears alongside PRIMARY
-  const savingsAcc = all.find(a => a.accountUid !== acc.accountUid);
-  return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory, savingsAccountUid: savingsAcc?.accountUid || null };
+  return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
 }
 
 async function starlingFetchTransactions(token, accountUid, categoryUid, since, proxyBase) {
@@ -490,70 +488,68 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
-// Fetch Easy Saver balance. Returns { balance, source } or { balance: null, source: "not found" }.
-// Tries four sources, returns the first that gives a positive result.
-async function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAccountUid, proxyBase) {
+// Fetch Easy Saver balance. Returns { balance, source, debug } or { balance: null, debug }.
+// debug is a short string describing what was found — shown in a toast to help diagnose failures.
+async function starlingFetchSavingsBalance(token, primaryAccountUid, proxyBase) {
   const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
   const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+  const lines = []; // debug log
 
-  // 1. Separate savings account in /accounts list
-  if (savingsAccountUid) {
-    try {
-      const r = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: hdr });
-      if (r.ok) {
-        const d = await r.json();
-        const v = (d.effectiveBalance?.minorUnits ?? d.clearedBalance?.minorUnits ?? 0) / 100;
-        if (v > 0) return { balance: v, source: "savings account" };
+  // Step 1: list all accounts, try balance on every non-primary one
+  try {
+    const r = await fetch(`${base}/accounts`, { headers: hdr });
+    if (r.ok) {
+      const d = await r.json();
+      const all = d.accounts || [];
+      lines.push(`accounts:${all.map(a=>a.accountType).join(",")}`);
+      const others = all.filter(a => a.accountUid !== primaryAccountUid);
+      for (const acc of others) {
+        try {
+          const br = await fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
+          if (br.ok) {
+            const bd = await br.json();
+            const v = (bd.effectiveBalance?.minorUnits ?? bd.clearedBalance?.minorUnits ?? 0) / 100;
+            lines.push(`${acc.accountType}:£${v.toFixed(2)}`);
+            if (v > 0) return { balance: v, source: acc.accountType, debug: lines.join(" | ") };
+          } else {
+            lines.push(`${acc.accountType}:bal${br.status}`);
+          }
+        } catch(e) { lines.push(`${acc.accountType}:err`); }
       }
-    } catch {}
-  }
+    } else {
+      lines.push(`accounts:${r.status}`);
+    }
+  } catch(e) { lines.push(`accounts:fetch-err`); }
 
-  // 2. Savings goals API (/account/{uid}/savings-goals)
+  // Step 2: savings goals
   try {
     const r = await fetch(`${base}/account/${primaryAccountUid}/savings-goals`, { headers: hdr });
     if (r.ok) {
       const d = await r.json();
       const goals = d.savingsGoalList || [];
-      const best = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
-      if (best) {
-        const v = (best.totalSaved?.minorUnits || 0) / 100;
-        if (v > 0) return { balance: v, source: `savings goal "${best.name}"` };
+      lines.push(`goals:${goals.map(g=>`${g.name}=£${((g.totalSaved?.minorUnits||0)/100).toFixed(0)}`).join(",") || "none"}`);
+      for (const g of goals) {
+        const v = (g.totalSaved?.minorUnits || 0) / 100;
+        if (v > 0) return { balance: v, source: `goal "${g.name}"`, debug: lines.join(" | ") };
       }
-    }
-  } catch {}
+    } else { lines.push(`goals:${r.status}`); }
+  } catch { lines.push("goals:err"); }
 
-  // 3. Spaces API (/account/{uid}/spaces)
+  // Step 3: spaces
   try {
     const r = await fetch(`${base}/account/${primaryAccountUid}/spaces`, { headers: hdr });
     if (r.ok) {
       const d = await r.json();
-      const all = [...(d.savingsGoals || []), ...(d.savingsSpaces || [])];
-      const best = all.find(sp => /easy saver/i.test(sp.name)) || all[0];
-      if (best) {
-        const v = (best.totalSaved?.minorUnits || best.balance?.minorUnits || 0) / 100;
-        if (v > 0) return { balance: v, source: `space "${best.name}"` };
+      const all = [...(d.savingsGoals||[]), ...(d.savingsSpaces||[])];
+      lines.push(`spaces:${all.map(s=>`${s.name}=£${(((s.totalSaved||s.balance)?.minorUnits||0)/100).toFixed(0)}`).join(",") || "none"}`);
+      for (const s of all) {
+        const v = ((s.totalSaved?.minorUnits || s.balance?.minorUnits) || 0) / 100;
+        if (v > 0) return { balance: v, source: `space "${s.name}"`, debug: lines.join(" | ") };
       }
-    }
-  } catch {}
+    } else { lines.push(`spaces:${r.status}`); }
+  } catch { lines.push("spaces:err"); }
 
-  // 4. Re-fetch all accounts and try each non-primary one (catches different account orderings)
-  try {
-    const r = await fetch(`${base}/accounts`, { headers: hdr });
-    if (r.ok) {
-      const d = await r.json();
-      const others = (d.accounts || []).filter(a => a.accountUid !== primaryAccountUid);
-      for (const acc of others) {
-        const br = await fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
-        if (br.ok) {
-          const bd = await br.json();
-          const v = (bd.effectiveBalance?.minorUnits ?? bd.clearedBalance?.minorUnits ?? 0) / 100;
-          if (v > 0) return { balance: v, source: `account "${acc.name||acc.accountType}" (${acc.accountType})` };
-        }
-      }
-    }
-  } catch {}
-
-  return { balance: null, source: "not found" };
+  return { balance: null, debug: lines.join(" | ") };
 }
 
 // Derive a Google favicon URL from a merchant display name — no API call needed.
@@ -1205,7 +1201,7 @@ root.render(React.createElement(App));
     if (bankSyncing) return;
     setBankSyncing(true);
     try {
-      const { accountUid, categoryUid, savingsAccountUid } = await starlingGetAccount(starlingToken, starlingProxy);
+      const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
       const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
       const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
       if (balRes.ok) {
@@ -1213,13 +1209,13 @@ root.render(React.createElement(App));
         const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
         setManualBalances(prev => ({ ...prev, main: liveBal }));
       }
-      // Easy Saver balance — tries four sources, toasts result for debugging
-      const savResult = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+      // Easy Saver balance — tries accounts list, savings goals, spaces
+      const savResult = await starlingFetchSavingsBalance(starlingToken, accountUid, starlingProxy);
       if (savResult.balance !== null) {
         setManualBalances(prev => ({ ...prev, savings: savResult.balance }));
-        showToast(`Easy Saver: £${savResult.balance.toFixed(2)} (via ${savResult.source})`);
+        showToast(`Easy Saver: £${savResult.balance.toFixed(2)} via ${savResult.source}`);
       } else {
-        showToast(`Easy Saver balance not found — check token has savings:read scope`, "error");
+        showToast(`Easy Saver: not found — ${savResult.debug}`, "error");
       }
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
@@ -1249,8 +1245,8 @@ root.render(React.createElement(App));
     try {
       if (starlingToken) {
         try {
-          const { accountUid, categoryUid, savingsAccountUid } = await starlingGetAccount(starlingToken, starlingProxy);
-          console.log("[Starling] account", accountUid, "category", categoryUid, "savings", savingsAccountUid);
+          const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
+          console.log("[Starling] account", accountUid, "category", categoryUid);
           const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
           const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
           if (balRes.ok) {
@@ -1258,8 +1254,8 @@ root.render(React.createElement(App));
             const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
             setManualBalances(prev => ({ ...prev, main: liveBal }));
           }
-          // Easy Saver balance — tries four sources
-          const savResult = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+          // Easy Saver balance — tries accounts list, savings goals, spaces
+          const savResult = await starlingFetchSavingsBalance(starlingToken, accountUid, starlingProxy);
           if (savResult.balance !== null) setManualBalances(prev => ({ ...prev, savings: savResult.balance }));
           console.log("[Starling] savings balance:", savResult);
           const existing = transactions.filter(t => t.accountId === "main");
