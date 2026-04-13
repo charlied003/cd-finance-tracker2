@@ -1560,8 +1560,10 @@ root.render(React.createElement(App));
               merchantRules={merchantRules} setMerchantRules={setMerchantRules}
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})} />}
             {view==="receipts" && <ReceiptsView
-              transactions={visibleTxns} receipts={receipts}
+              transactions={visibleTxns} allTransactions={transactions} receipts={receipts}
               onAdd={()=>setReceiptModal({step:"upload",pinnedTxId:null})}
+              onUpdateReceipt={(txId,data)=>setReceipts(prev=>({...prev,[txId]:data}))}
+              onDeleteReceipt={(txId)=>setReceipts(prev=>{const n={...prev};delete n[txId];return n;})}
               gmailStatus={gmailStatus} gmailSyncing={gmailSyncing} gmailProgress={gmailProgress} onScanGmail={scanGmailEmails}
               onResetGmailHistory={()=>{
                 const saved = new Set(JSON.parse(localStorage.getItem(GMAIL_SAVED_KEY)||"[]"));
@@ -3599,10 +3601,45 @@ function InsightsView({transactions, periods, activeAccounts, cycleStart, period
 
 
 // ─── Receipts View ────────────────────────────────────────────────────────────
-function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing, gmailProgress, onScanGmail, onResetGmailHistory}) {
+function ReceiptsView({transactions, allTransactions, receipts, onAdd, onUpdateReceipt, onDeleteReceipt, gmailStatus, gmailSyncing, gmailProgress, onScanGmail, onResetGmailHistory}) {
+  const [editingId, setEditingId]         = useState(null);
+  const [editItems, setEditItems]         = useState([]);
+  const [reassignId, setReassignId]       = useState(null);
+  const [reassignSearch, setReassignSearch] = useState("");
+
   const withReceipts = transactions.filter(t => receipts[t.id]?.items?.length > 0)
     .sort((a,b) => b.date > a.date ? 1 : -1);
   const processedCount = JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY)||"[]").length;
+
+  function startEdit(t) {
+    if (editingId === t.id) { setEditingId(null); return; }
+    setEditingId(t.id);
+    setEditItems((receipts[t.id].items||[]).map(i=>({...i})));
+    setReassignId(null);
+    setReassignSearch("");
+  }
+
+  function saveEdit(t) {
+    const validItems = editItems.filter(i => i.name?.trim());
+    if (!validItems.length) return;
+    if (reassignId && reassignId !== t.id) {
+      onDeleteReceipt(t.id);
+      onUpdateReceipt(reassignId, { items: validItems });
+    } else {
+      onUpdateReceipt(t.id, { items: validItems });
+    }
+    setEditingId(null);
+  }
+
+  // Transactions without a receipt (for reassignment picker), plus current editing tx
+  const allTxns = allTransactions || transactions;
+  const eligibleForReassign = allTxns.filter(t =>
+    !receipts[t.id]?.items?.length || t.id === editingId
+  ).sort((a,b) => b.date > a.date ? 1 : -1);
+  const filteredReassign = reassignSearch
+    ? eligibleForReassign.filter(t => t.description.toLowerCase().includes(reassignSearch.toLowerCase()))
+    : eligibleForReassign.slice(0, 20);
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -3638,21 +3675,95 @@ function ReceiptsView({transactions, receipts, onAdd, gmailStatus, gmailSyncing,
       )}
       {withReceipts.map(t=>{
         const r=receipts[t.id];
+        const isEditing = editingId === t.id;
         return (
-          <div key={t.id} style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,marginBottom:10,overflow:"hidden"}}>
-            <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1c1f2e"}}>
+          <div key={t.id} style={{background:"#0f1117",border:`1px solid ${isEditing?"#60a5fa40":"#1c1f2e"}`,borderRadius:10,marginBottom:10,overflow:"hidden",transition:"border-color 0.15s"}}>
+            {/* Header — tap to toggle edit */}
+            <div onClick={()=>startEdit(t)} style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #1c1f2e",cursor:"pointer"}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:13,fontWeight:700}}>{t.description}</div>
                 <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{t.date} · {fmt(Math.abs(t.amount))}</div>
               </div>
-              <span style={{fontSize:10,color:"#fbbf24",fontWeight:700}}>{r.items.length} ITEMS</span>
+              <span style={{fontSize:10,color:isEditing?"#60a5fa":"#fbbf24",fontWeight:700}}>{isEditing?"EDITING":`${r.items.length} ITEMS`}</span>
             </div>
-            {r.items.map((item,i)=>(
+
+            {/* Read-only items list */}
+            {!isEditing && r.items.map((item,i)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 14px",borderBottom:i<r.items.length-1?"1px solid #1c1f2e":"none"}}>
                 <span style={{fontSize:12,color:"#94a3b8",flex:1}}>{item.qty>1?`${item.qty}× `:""}{item.name}</span>
                 <span style={{fontSize:12,fontWeight:700,color:"#e2e4ec"}}>{fmt(item.amount*(item.qty||1))}</span>
               </div>
             ))}
+
+            {/* Edit panel */}
+            {isEditing && (
+              <div style={{padding:"12px 14px"}}>
+                <div style={{fontSize:10,color:"#4b5563",fontWeight:700,letterSpacing:1,marginBottom:8}}>ITEMS</div>
+                {editItems.map((item,i)=>(
+                  <div key={i} style={{display:"flex",gap:6,marginBottom:7,alignItems:"center"}}>
+                    <input value={item.name||""} onChange={e=>setEditItems(ei=>ei.map((x,j)=>j===i?{...x,name:e.target.value}:x))}
+                      placeholder="Item name"
+                      style={{flex:2,background:"#1a1d2e",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 8px",color:"#e2e4ec",fontSize:12,minWidth:0}} />
+                    <input type="number" value={item.qty||1} min={1}
+                      onChange={e=>setEditItems(ei=>ei.map((x,j)=>j===i?{...x,qty:parseInt(e.target.value)||1}:x))}
+                      style={{width:38,background:"#1a1d2e",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 4px",color:"#e2e4ec",fontSize:12,textAlign:"center"}} />
+                    <input type="number" value={item.amount||0} step="0.01" min={0}
+                      onChange={e=>setEditItems(ei=>ei.map((x,j)=>j===i?{...x,amount:parseFloat(e.target.value)||0}:x))}
+                      style={{width:62,background:"#1a1d2e",border:"1px solid #2a2d3a",borderRadius:6,padding:"6px 4px",color:"#e2e4ec",fontSize:12,textAlign:"right"}} />
+                    <button onClick={()=>setEditItems(ei=>ei.filter((_,j)=>j!==i))}
+                      style={{background:"none",border:"none",color:"#f87171",fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                  </div>
+                ))}
+                <button onClick={()=>setEditItems(ei=>[...ei,{name:"",amount:0,qty:1}])}
+                  style={{background:"none",border:"1px dashed #2a2d3a",borderRadius:6,color:"#4b5563",fontSize:11,padding:"6px 12px",cursor:"pointer",width:"100%",marginBottom:14}}>
+                  + Add item
+                </button>
+
+                {/* Reassign section */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:10,color:"#4b5563",fontWeight:700,letterSpacing:1,marginBottom:6}}>REASSIGN TO TRANSACTION</div>
+                  <input value={reassignSearch} onChange={e=>setReassignSearch(e.target.value)}
+                    placeholder="Search transactions…"
+                    style={{width:"100%",background:"#1a1d2e",border:"1px solid #2a2d3a",borderRadius:6,padding:"7px 10px",color:"#e2e4ec",fontSize:12,marginBottom:6}} />
+                  <div style={{maxHeight:130,overflowY:"auto",border:"1px solid #1c1f2e",borderRadius:6}}>
+                    {filteredReassign.length===0 && (
+                      <div style={{padding:"10px 12px",fontSize:11,color:"#4b5563",textAlign:"center"}}>No matching transactions</div>
+                    )}
+                    {filteredReassign.map(tx=>(
+                      <div key={tx.id} onClick={()=>setReassignId(tx.id===reassignId?null:tx.id)}
+                        style={{padding:"7px 10px",background:reassignId===tx.id?"#60a5fa18":"transparent",cursor:"pointer",borderBottom:"1px solid #1c1f2e",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:11,color:reassignId===tx.id?"#60a5fa":"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.description}</div>
+                          <div style={{fontSize:9,color:"#4b5563",marginTop:1}}>{tx.date} · {fmt(Math.abs(tx.amount))}</div>
+                        </div>
+                        {reassignId===tx.id && <span style={{fontSize:12,color:"#60a5fa",marginLeft:6}}>✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                  {reassignId && reassignId !== t.id && (
+                    <div style={{fontSize:10,color:"#60a5fa",marginTop:4}}>
+                      Will move receipt to: {allTxns.find(tx=>tx.id===reassignId)?.description}
+                    </div>
+                  )}
+                </div>
+
+                {/* Action buttons */}
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{ if(window.confirm("Delete this receipt?")){ onDeleteReceipt(t.id); setEditingId(null); }}}
+                    style={{background:"#f8717115",border:"1px solid #f8717140",color:"#f87171",borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>
+                    DELETE
+                  </button>
+                  <button onClick={()=>setEditingId(null)}
+                    style={{background:"none",border:"1px solid #2a2d3a",color:"#4b5563",borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1}}>
+                    CANCEL
+                  </button>
+                  <button onClick={()=>saveEdit(t)}
+                    style={{background:"#60a5fa20",border:"1px solid #60a5fa40",color:"#60a5fa",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1,flex:1}}>
+                    SAVE
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })}

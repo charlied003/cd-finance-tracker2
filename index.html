@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.39</title>
+<title>Finance Tracker v3.40</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.39";
+  const APP_VERSION = "3.40";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -1801,8 +1801,15 @@ root.render(React.createElement(App));
       ReceiptsView,
       {
         transactions: visibleTxns,
+        allTransactions: transactions,
         receipts,
         onAdd: () => setReceiptModal({ step: "upload", pinnedTxId: null }),
+        onUpdateReceipt: (txId, data) => setReceipts((prev) => __spreadProps(__spreadValues({}, prev), { [txId]: data })),
+        onDeleteReceipt: (txId) => setReceipts((prev) => {
+          const n = __spreadValues({}, prev);
+          delete n[txId];
+          return n;
+        }),
         gmailStatus,
         gmailSyncing,
         gmailProgress,
@@ -3174,12 +3181,48 @@ root.render(React.createElement(App));
       transition: "height .4s"
     } }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 8, color: "#4b5563", textAlign: "center", lineHeight: 1.2 } }, d.label.split(" ")[0]))))), movers.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Biggest Movers vs last period"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, movers.map(({ cat, delta }) => /* @__PURE__ */ React.createElement("div", { key: cat, style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 8, height: 8, borderRadius: "50%", background: CAT_COLORS[cat] || "#4b5563", flexShrink: 0 } }), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: 13, fontWeight: 700 } }, cat), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: delta > 0 ? "#f87171" : "#4ade80" } }, delta > 0 ? "\u25B2" : "\u25BC", " ", fmt(Math.abs(delta))))))), recurring.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Recurring Transactions"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, recurring.map((r) => /* @__PURE__ */ React.createElement("div", { key: r.desc, style: { background: "#0f1117", border: `1px solid ${r.priceChange ? "#fbbf2440" : "#1c1f2e"}`, borderRadius: 8, padding: "10px 14px", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.desc), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, r.count, " payments \xB7 last ", r.lastDate)), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#94a3b8" } }, fmt(r.latestAmt)), r.priceChange && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#fbbf24", fontWeight: 700, letterSpacing: 1 } }, "PRICE CHANGED"))))))));
   }
-  function ReceiptsView({ transactions, receipts, onAdd, gmailStatus, gmailSyncing, gmailProgress, onScanGmail, onResetGmailHistory }) {
+  function ReceiptsView({ transactions, allTransactions, receipts, onAdd, onUpdateReceipt, onDeleteReceipt, gmailStatus, gmailSyncing, gmailProgress, onScanGmail, onResetGmailHistory }) {
+    const [editingId, setEditingId] = useState(null);
+    const [editItems, setEditItems] = useState([]);
+    const [reassignId, setReassignId] = useState(null);
+    const [reassignSearch, setReassignSearch] = useState("");
     const withReceipts = transactions.filter((t) => {
       var _a, _b;
       return ((_b = (_a = receipts[t.id]) == null ? void 0 : _a.items) == null ? void 0 : _b.length) > 0;
     }).sort((a, b) => b.date > a.date ? 1 : -1);
     const processedCount = JSON.parse(localStorage.getItem(GMAIL_PROCESSED_KEY) || "[]").length;
+    function startEdit(t) {
+      if (editingId === t.id) {
+        setEditingId(null);
+        return;
+      }
+      setEditingId(t.id);
+      setEditItems((receipts[t.id].items || []).map((i) => __spreadValues({}, i)));
+      setReassignId(null);
+      setReassignSearch("");
+    }
+    function saveEdit(t) {
+      const validItems = editItems.filter((i) => {
+        var _a;
+        return (_a = i.name) == null ? void 0 : _a.trim();
+      });
+      if (!validItems.length) return;
+      if (reassignId && reassignId !== t.id) {
+        onDeleteReceipt(t.id);
+        onUpdateReceipt(reassignId, { items: validItems });
+      } else {
+        onUpdateReceipt(t.id, { items: validItems });
+      }
+      setEditingId(null);
+    }
+    const allTxns = allTransactions || transactions;
+    const eligibleForReassign = allTxns.filter(
+      (t) => {
+        var _a, _b;
+        return !((_b = (_a = receipts[t.id]) == null ? void 0 : _a.items) == null ? void 0 : _b.length) || t.id === editingId;
+      }
+    ).sort((a, b) => b.date > a.date ? 1 : -1);
+    const filteredReassign = reassignSearch ? eligibleForReassign.filter((t) => t.description.toLowerCase().includes(reassignSearch.toLowerCase())) : eligibleForReassign.slice(0, 20);
     return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement(SectionLabel, null, withReceipts.length, " receipts"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6 } }, gmailStatus === "connected" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -3198,8 +3241,94 @@ root.render(React.createElement(App));
       "\u21BA ",
       processedCount
     )), /* @__PURE__ */ React.createElement("button", { onClick: onAdd, style: { background: "#fbbf2415", border: "1px solid #fbbf2440", color: "#fbbf24", borderRadius: 8, padding: "6px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ ADD RECEIPT"))), withReceipts.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginTop: 40, color: "#4b5563" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 36 } }, "\u{1F9FE}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700, marginTop: 12 } }, "No receipts yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, marginTop: 6, lineHeight: 1.6 } }, "Add a receipt photo or scan Gmail", /* @__PURE__ */ React.createElement("br", null), "to see item-level spending breakdown")), withReceipts.map((t) => {
+      var _a;
       const r = receipts[t.id];
-      return /* @__PURE__ */ React.createElement("div", { key: t.id, style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, marginBottom: 10, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700 } }, t.description), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, t.date, " \xB7 ", fmt(Math.abs(t.amount)))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#fbbf24", fontWeight: 700 } }, r.items.length, " ITEMS")), r.items.map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "7px 14px", borderBottom: i < r.items.length - 1 ? "1px solid #1c1f2e" : "none" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#94a3b8", flex: 1 } }, item.qty > 1 ? `${item.qty}\xD7 ` : "", item.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: "#e2e4ec" } }, fmt(item.amount * (item.qty || 1))))));
+      const isEditing = editingId === t.id;
+      return /* @__PURE__ */ React.createElement("div", { key: t.id, style: { background: "#0f1117", border: `1px solid ${isEditing ? "#60a5fa40" : "#1c1f2e"}`, borderRadius: 10, marginBottom: 10, overflow: "hidden", transition: "border-color 0.15s" } }, /* @__PURE__ */ React.createElement("div", { onClick: () => startEdit(t), style: { padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #1c1f2e", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700 } }, t.description), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, t.date, " \xB7 ", fmt(Math.abs(t.amount)))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: isEditing ? "#60a5fa" : "#fbbf24", fontWeight: 700 } }, isEditing ? "EDITING" : `${r.items.length} ITEMS`)), !isEditing && r.items.map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "7px 14px", borderBottom: i < r.items.length - 1 ? "1px solid #1c1f2e" : "none" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#94a3b8", flex: 1 } }, item.qty > 1 ? `${item.qty}\xD7 ` : "", item.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: "#e2e4ec" } }, fmt(item.amount * (item.qty || 1))))), isEditing && /* @__PURE__ */ React.createElement("div", { style: { padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", fontWeight: 700, letterSpacing: 1, marginBottom: 8 } }, "ITEMS"), editItems.map((item, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", gap: 6, marginBottom: 7, alignItems: "center" } }, /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          value: item.name || "",
+          onChange: (e) => setEditItems((ei) => ei.map((x, j) => j === i ? __spreadProps(__spreadValues({}, x), { name: e.target.value }) : x)),
+          placeholder: "Item name",
+          style: { flex: 2, background: "#1a1d2e", border: "1px solid #2a2d3a", borderRadius: 6, padding: "6px 8px", color: "#e2e4ec", fontSize: 12, minWidth: 0 }
+        }
+      ), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "number",
+          value: item.qty || 1,
+          min: 1,
+          onChange: (e) => setEditItems((ei) => ei.map((x, j) => j === i ? __spreadProps(__spreadValues({}, x), { qty: parseInt(e.target.value) || 1 }) : x)),
+          style: { width: 38, background: "#1a1d2e", border: "1px solid #2a2d3a", borderRadius: 6, padding: "6px 4px", color: "#e2e4ec", fontSize: 12, textAlign: "center" }
+        }
+      ), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "number",
+          value: item.amount || 0,
+          step: "0.01",
+          min: 0,
+          onChange: (e) => setEditItems((ei) => ei.map((x, j) => j === i ? __spreadProps(__spreadValues({}, x), { amount: parseFloat(e.target.value) || 0 }) : x)),
+          style: { width: 62, background: "#1a1d2e", border: "1px solid #2a2d3a", borderRadius: 6, padding: "6px 4px", color: "#e2e4ec", fontSize: 12, textAlign: "right" }
+        }
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => setEditItems((ei) => ei.filter((_, j) => j !== i)),
+          style: { background: "none", border: "none", color: "#f87171", fontSize: 18, cursor: "pointer", padding: "0 2px", lineHeight: 1 }
+        },
+        "\xD7"
+      ))), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => setEditItems((ei) => [...ei, { name: "", amount: 0, qty: 1 }]),
+          style: { background: "none", border: "1px dashed #2a2d3a", borderRadius: 6, color: "#4b5563", fontSize: 11, padding: "6px 12px", cursor: "pointer", width: "100%", marginBottom: 14 }
+        },
+        "+ Add item"
+      ), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", fontWeight: 700, letterSpacing: 1, marginBottom: 6 } }, "REASSIGN TO TRANSACTION"), /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          value: reassignSearch,
+          onChange: (e) => setReassignSearch(e.target.value),
+          placeholder: "Search transactions\u2026",
+          style: { width: "100%", background: "#1a1d2e", border: "1px solid #2a2d3a", borderRadius: 6, padding: "7px 10px", color: "#e2e4ec", fontSize: 12, marginBottom: 6 }
+        }
+      ), /* @__PURE__ */ React.createElement("div", { style: { maxHeight: 130, overflowY: "auto", border: "1px solid #1c1f2e", borderRadius: 6 } }, filteredReassign.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", fontSize: 11, color: "#4b5563", textAlign: "center" } }, "No matching transactions"), filteredReassign.map((tx) => /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          key: tx.id,
+          onClick: () => setReassignId(tx.id === reassignId ? null : tx.id),
+          style: { padding: "7px 10px", background: reassignId === tx.id ? "#60a5fa18" : "transparent", cursor: "pointer", borderBottom: "1px solid #1c1f2e", display: "flex", justifyContent: "space-between", alignItems: "center" }
+        },
+        /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: reassignId === tx.id ? "#60a5fa" : "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, tx.description), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", marginTop: 1 } }, tx.date, " \xB7 ", fmt(Math.abs(tx.amount)))),
+        reassignId === tx.id && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#60a5fa", marginLeft: 6 } }, "\u2713")
+      ))), reassignId && reassignId !== t.id && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#60a5fa", marginTop: 4 } }, "Will move receipt to: ", (_a = allTxns.find((tx) => tx.id === reassignId)) == null ? void 0 : _a.description)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => {
+            if (window.confirm("Delete this receipt?")) {
+              onDeleteReceipt(t.id);
+              setEditingId(null);
+            }
+          },
+          style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }
+        },
+        "DELETE"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => setEditingId(null),
+          style: { background: "none", border: "1px solid #2a2d3a", color: "#4b5563", borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }
+        },
+        "CANCEL"
+      ), /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => saveEdit(t),
+          style: { background: "#60a5fa20", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1, flex: 1 }
+        },
+        "SAVE"
+      ))));
     }));
   }
   function ReceiptModal({ state, setState, transactions, fileRef, onSave, onSkip, onClose, apiKey, onAiScan }) {
