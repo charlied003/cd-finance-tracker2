@@ -2295,7 +2295,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                 <div key={s.name+i} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:hasDates?dotColor:"transparent",border:hasDates?"none":"2px solid #a78bfa"}}/>
-                    {!pseudo.on && (()=>{
+                    {(()=>{
                       const k=merchantKey(s.name||"");
                       if (MERCHANT_EMOJIS[k]) return <span style={{fontSize:15,lineHeight:1,flexShrink:0}}>{MERCHANT_EMOJIS[k]}</span>;
                       if (merchantLogoMap[k]) return <img src={merchantLogoMap[k]} alt="" style={{width:16,height:16,borderRadius:3,objectFit:"contain",flexShrink:0}} onError={e=>{e.target.style.display="none"}}/>;
@@ -2349,7 +2349,7 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                       <div key={merchant} style={{borderBottom:i<merchants.length-1?"1px solid #1c1f2e":"none"}}>
                         <div onClick={()=>setExpandedMerchant(isMOpen?null:mKey)}
                           style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 14px 8px 28px",cursor:"pointer",background:isMOpen?"#111318":"transparent"}}>
-                          {!pseudo.on && (()=>{
+                          {(()=>{
                             const k=merchantKey(merchant);
                             if (MERCHANT_EMOJIS[k]) return <span style={{fontSize:15,lineHeight:1,flexShrink:0,marginRight:6}}>{MERCHANT_EMOJIS[k]}</span>;
                             if (merchantLogoMap[k]) return <img src={merchantLogoMap[k]} alt="" style={{width:18,height:18,borderRadius:3,objectFit:"contain",flexShrink:0,marginRight:6}} onError={e=>{e.target.style.display="none"}}/>;
@@ -2385,16 +2385,25 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                                 </div>
                               );
                             })()}
-                            <div style={{fontSize:9,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:4}}>Transactions</div>
-                            {mTxns.map((t,j)=>(
-                              <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:j<mTxns.length-1?"1px solid #1c1f2e30":"none"}}>
-                                <div style={{flex:1,minWidth:0}}>
-                                  <div style={{fontSize:11,color:"#6b7280"}}>{t.date}{receipts[t.id]?.items?.length>0&&<span style={{color:"#fbbf24",marginLeft:4}}>🧾</span>}</div>
-                                  {t.note&&<div style={{fontSize:10,color:"#4b5563",fontStyle:"italic",marginTop:1}}>{t.note}</div>}
-                                </div>
-                                <span style={{fontSize:12,fontWeight:700,color:"#f87171",flexShrink:0}}>{fmt(pAmt(t.amount,pseudo))}</span>
-                              </div>
-                            ))}
+                            {(()=>{
+                              // Only show transactions that aren't already covered by receipt items
+                              const unreceipted = mTxns.filter(t => !(receipts[t.id]?.items?.length > 0));
+                              if (!unreceipted.length) return null;
+                              return (
+                                <>
+                                  <div style={{fontSize:9,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:4}}>Transactions</div>
+                                  {unreceipted.map((t,j)=>(
+                                    <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:j<unreceipted.length-1?"1px solid #1c1f2e30":"none"}}>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{fontSize:11,color:"#6b7280"}}>{t.date}</div>
+                                        {t.note&&<div style={{fontSize:10,color:"#4b5563",fontStyle:"italic",marginTop:1}}>{t.note}</div>}
+                                      </div>
+                                      <span style={{fontSize:12,fontWeight:700,color:"#f87171",flexShrink:0}}>{fmt(pAmt(t.amount,pseudo))}</span>
+                                    </div>
+                                  ))}
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>
