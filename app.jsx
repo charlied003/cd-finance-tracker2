@@ -3285,8 +3285,10 @@ function SavingsView({ transactions, manualBalances, starlingToken }) {
 
   const displayMaxNetAbs = Math.max(...displayMonthly.map(d => Math.abs(d.net)), 1);
 
-  // SVG line chart geometry — wider left pad for Y-axis labels
-  const W = 320, H = 130, PL = 52, PR = 10, PT = 12, PB = 22;
+  const [activePoint, setActivePoint] = useState(null);
+
+  // SVG line chart geometry
+  const W = 340, H = 180, PL = 52, PR = 12, PT = 16, PB = 32;
   const cW = W - PL - PR, cH = H - PT - PB;
   const fmtY = (v) => v >= 1000 ? `£${(v / 1000).toFixed(1)}k` : `£${Math.round(v)}`;
 
@@ -3295,7 +3297,6 @@ function SavingsView({ transactions, manualBalances, starlingToken }) {
     const vals = displayHistory.map(p => p.balance);
     const minV = Math.min(...vals);
     const maxV = Math.max(...vals, minV + 1);
-    // Snap to clean numbers for Y-axis readability
     const range = maxV - minV;
     const snap = Math.pow(10, Math.floor(Math.log10(range || 1)));
     const snappedMin = Math.floor(minV / snap) * snap;
@@ -3309,6 +3310,21 @@ function SavingsView({ transactions, manualBalances, starlingToken }) {
     }));
     return { svgPoints: pts, polylineStr: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: snappedMin, maxBal: snappedMax };
   }, [displayHistory]);
+
+  // One dot per calendar month — tappable for tooltip
+  const monthTicks = useMemo(() => {
+    if (svgPoints.length < 2) return [];
+    const seen = new Set();
+    return svgPoints.filter(p => {
+      const m = p.date.slice(0, 7);
+      if (seen.has(m)) return false;
+      seen.add(m);
+      return true;
+    }).map(p => {
+      const d = new Date(p.date + "T00:00:00");
+      return { ...p, monthKey: p.date.slice(0, 7), label: `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}` };
+    });
+  }, [svgPoints]);
 
   return (
     <div>
@@ -3329,9 +3345,10 @@ function SavingsView({ transactions, manualBalances, starlingToken }) {
       {svgPoints.length >= 2 && (
         <>
           <SectionLabel>Balance History</SectionLabel>
-          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"10px 12px",marginBottom:16}}>
-            <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}}>
-              {/* Y-axis ticks at 0%, 33%, 66%, 100% */}
+          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"10px 12px",marginBottom:16}}
+            onClick={()=>setActivePoint(null)}>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",display:"block"}}>
+              {/* Y-axis grid lines + labels */}
               {[0,1,2,3].map(i => {
                 const frac = i / 3;
                 const val = minBal + frac * (maxBal - minBal);
@@ -3339,24 +3356,51 @@ function SavingsView({ transactions, manualBalances, starlingToken }) {
                 return (
                   <g key={i}>
                     <line x1={PL-3} x2={W-PR} y1={y} y2={y} stroke={i===0?"#2a2d3e":"#1c1f2e"} strokeWidth="1"/>
-                    <text x={PL-6} y={y+3} fontSize="8" fill="#4b5563" textAnchor="end">{fmtY(val)}</text>
+                    <text x={PL-6} y={y+3} fontSize="9" fill="#4b5563" textAnchor="end">{fmtY(val)}</text>
                   </g>
                 );
               })}
               {/* Y-axis line */}
               <line x1={PL} x2={PL} y1={PT} y2={PT+cH} stroke="#2a2d3e" strokeWidth="1"/>
+              {/* Monthly vertical tick lines */}
+              {monthTicks.map(t => (
+                <line key={t.monthKey} x1={t.x} x2={t.x} y1={PT} y2={PT+cH+4}
+                  stroke="#2a2d3e" strokeWidth="1" strokeDasharray="3,3"/>
+              ))}
               {/* Area fill */}
-              <polygon
-                points={`${PL},${PT+cH} ${polylineStr} ${W-PR},${PT+cH}`}
-                fill="#fbbf2412"
-              />
+              <polygon points={`${PL},${PT+cH} ${polylineStr} ${W-PR},${PT+cH}`} fill="#fbbf2412"/>
               {/* Line */}
               <polyline points={polylineStr} fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
-              {/* Current balance dot */}
-              <circle cx={svgPoints[svgPoints.length-1].x} cy={svgPoints[svgPoints.length-1].y} r="4" fill="#fbbf24"/>
-              {/* X-axis date labels */}
-              <text x={PL} y={H-2} fontSize="8" fill="#4b5563">{displayHistory[0]?.date?.slice(0,7)}</text>
-              <text x={W-PR} y={H-2} fontSize="8" fill="#4b5563" textAnchor="end">{displayHistory[displayHistory.length-1]?.date?.slice(0,7)}</text>
+              {/* Monthly dots — tappable */}
+              {monthTicks.map(t => (
+                <circle key={t.monthKey} cx={t.x} cy={t.y} r="5" fill="#fbbf24" stroke="#0f1117" strokeWidth="1.5"
+                  style={{cursor:"pointer"}}
+                  onClick={e=>{e.stopPropagation();setActivePoint(ap=>ap?.monthKey===t.monthKey?null:t);}}/>
+              ))}
+              {/* Month labels on x-axis */}
+              {monthTicks.map((t,i) => {
+                // Only label alternate months if crowded (> 6 ticks)
+                if (monthTicks.length > 6 && i % 2 !== 0) return null;
+                const d = new Date(t.date + "T00:00:00");
+                return (
+                  <text key={t.monthKey} x={t.x} y={H-4} fontSize="8" fill="#4b5563" textAnchor="middle">
+                    {MONTH_NAMES[d.getMonth()]}
+                  </text>
+                );
+              })}
+              {/* Tooltip on active month */}
+              {activePoint && (()=>{
+                const TW = 72, TH = 30;
+                const tx = Math.min(Math.max(activePoint.x, PL + TW/2), W - PR - TW/2);
+                const ty = activePoint.y > PT + cH/2 ? activePoint.y - TH - 8 : activePoint.y + 10;
+                return (
+                  <g>
+                    <rect x={tx-TW/2} y={ty} width={TW} height={TH} rx={5} fill="#1c1f2e" stroke="#fbbf24" strokeWidth="1.5"/>
+                    <text x={tx} y={ty+11} fontSize="8" fill="#fbbf24" textAnchor="middle">{activePoint.label}</text>
+                    <text x={tx} y={ty+23} fontSize="10" fill="#e2e4ec" textAnchor="middle" fontWeight="bold">{fmt(pAmt(activePoint.balance,pseudo))}</text>
+                  </g>
+                );
+              })()}
             </svg>
           </div>
         </>
