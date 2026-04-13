@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.27</title>
+<title>Finance Tracker v3.28</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.27";
+  const APP_VERSION = "3.28";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -2148,7 +2148,13 @@ root.render(React.createElement(App));
     return name.toLowerCase().replace(/\.com(\/[^\s]*)?/, "").replace(/\.co\.uk/, "").replace(/\.net/, "").replace(/\.org/, "").replace(/\b(uk|ltd|limited|plc|payments|services|store|bill)\b/g, " ").replace(/[^a-z0-9]+/g, "").trim();
   }
   const LOGO_DOMAIN_OVERRIDES = {
-    "spar": "spar-international.com"
+    "spar": "spar-international.com",
+    "centra": "centra.ie",
+    "mcdonalds": "mcdonalds.com",
+    "marksandspencer": "marksandspencer.com",
+    // "Marks And Spencer"
+    "marksspencer": "marksandspencer.com"
+    // "Marks & Spencer"
   };
   const MERCHANT_EMOJIS = {
     "cashmachine": "\u{1F3E7}",

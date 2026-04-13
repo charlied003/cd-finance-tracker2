@@ -1899,7 +1899,11 @@ function merchantKey(name) {
 
 // Merchants where the inferred domain gives a wrong logo — map to a better one.
 const LOGO_DOMAIN_OVERRIDES = {
-  "spar": "spar-international.com",
+  "spar":             "spar-international.com",
+  "centra":           "centra.ie",
+  "mcdonalds":        "mcdonalds.com",
+  "marksandspencer":  "marksandspencer.com",  // "Marks And Spencer"
+  "marksspencer":     "marksandspencer.com",  // "Marks & Spencer"
 };
 
 // Non-brand merchant types shown as an emoji instead of a favicon.
