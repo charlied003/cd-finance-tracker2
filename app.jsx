@@ -883,8 +883,9 @@ const DEFAULT_RULES = {
   "supervalu":  { displayName:"SuperValu",     category:"Groceries"  },
   "dunnes":     { displayName:"Dunnes Stores", category:"Groceries"  },
   "aldi":       { displayName:"Aldi",          category:"Groceries"  },
-  "mcdonald":   { displayName:"McDonald's",    category:"Eating Out" },
-  "mcbride":    { displayName:"Spar",           category:"Groceries"  },
+  "mcdonald":   { displayName:"McDonald's",    category:"Eating Out"      },
+  "mcbride":    { displayName:"Spar",          category:"Groceries"       },
+  "amazon":     { displayName:"Amazon",        category:"Online Shopping" },
 };
 
   useEffect(() => {
