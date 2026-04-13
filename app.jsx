@@ -490,16 +490,52 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
-async function starlingFetchSavingsGoals(token, accountUid, proxyBase) {
+// Fetch Easy Saver balance. Tries three sources in order, returns the first non-zero result:
+//  1. The dedicated savings account from the /accounts list (most accurate)
+//  2. Savings goals API (older Starling Easy Saver products appear here)
+//  3. Spaces API (some Starling accounts use spaces instead of goals)
+async function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAccountUid, proxyBase) {
   const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+  const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+
+  // 1. Separate savings account balance
+  if (savingsAccountUid) {
+    try {
+      const r = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: hdr });
+      if (r.ok) {
+        const d = await r.json();
+        const v = (d.effectiveBalance?.minorUnits ?? d.clearedBalance?.minorUnits ?? 0) / 100;
+        if (v > 0) return v;
+      }
+    } catch {}
+  }
+
+  // 2. Savings goals API
   try {
-    const res = await fetch(`${base}/account/${accountUid}/savings-goals`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
-    });
-    if (!res.ok) return [];
-    const j = await res.json();
-    return j.savingsGoalList || [];
-  } catch { return []; }
+    const r = await fetch(`${base}/account/${primaryAccountUid}/savings-goals`, { headers: hdr });
+    if (r.ok) {
+      const d = await r.json();
+      const goals = d.savingsGoalList || [];
+      const best = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
+      if (best) {
+        const v = (best.totalSaved?.minorUnits || 0) / 100;
+        if (v > 0) return v;
+      }
+    }
+  } catch {}
+
+  // 3. Spaces API
+  try {
+    const r = await fetch(`${base}/account/${primaryAccountUid}/spaces`, { headers: hdr });
+    if (r.ok) {
+      const d = await r.json();
+      const spaces = [...(d.savingsGoals || []), ...(d.savingsSpaces || [])];
+      const total = spaces.reduce((s, sp) => s + (sp.totalSaved?.minorUnits || sp.balance?.minorUnits || 0), 0) / 100;
+      if (total > 0) return total;
+    }
+  } catch {}
+
+  return null; // couldn't determine — don't overwrite stored value
 }
 
 // Derive a Google favicon URL from a merchant display name — no API call needed.
@@ -1159,15 +1195,9 @@ root.render(React.createElement(App));
         const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
         setManualBalances(prev => ({ ...prev, main: liveBal }));
       }
-      // Easy Saver balance — it's a separate Starling account, not a savings goal
-      if (savingsAccountUid) {
-        const savBalRes = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
-        if (savBalRes.ok) {
-          const savBalData = await savBalRes.json();
-          const savBal = (savBalData.effectiveBalance?.minorUnits ?? savBalData.clearedBalance?.minorUnits ?? 0) / 100;
-          setManualBalances(prev => ({ ...prev, savings: savBal }));
-        }
-      }
+      // Easy Saver balance — tries account balance, savings goals, and spaces in order
+      const savBal = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+      if (savBal !== null) setManualBalances(prev => ({ ...prev, savings: savBal }));
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
       const since = lastDate
@@ -1205,14 +1235,9 @@ root.render(React.createElement(App));
             const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
             setManualBalances(prev => ({ ...prev, main: liveBal }));
           }
-          // Easy Saver balance — separate Starling account
-          if (savingsAccountUid) {
-            const savBalRes = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
-            if (savBalRes.ok) {
-              const savBalData = await savBalRes.json();
-              setManualBalances(prev => ({ ...prev, savings: (savBalData.effectiveBalance?.minorUnits ?? savBalData.clearedBalance?.minorUnits ?? 0) / 100 }));
-            }
-          }
+          // Easy Saver balance — tries account balance, savings goals, and spaces in order
+          const savBal = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+          if (savBal !== null) setManualBalances(prev => ({ ...prev, savings: savBal }));
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate
@@ -1512,7 +1537,7 @@ root.render(React.createElement(App));
               }} />}
             {view==="savings" && <SavingsView
               transactions={transactions} manualBalances={manualBalances}
-              starlingToken={starlingToken} bankSyncing={bankSyncing} onSync={syncStarling} />}
+              starlingToken={starlingToken} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -3149,7 +3174,7 @@ function AddAccountModal({onSave,onClose}) {
 
 
 // ─── Savings View ─────────────────────────────────────────────────────────────
-function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing, onSync }) {
+function SavingsView({ transactions, manualBalances, starlingToken }) {
   const pseudo = useContext(PseudoCtx);
 
   // All savings pot movements tagged on the main account
@@ -3257,20 +3282,13 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
 
       {/* Balance card */}
       <div style={{background:"#0f1117",border:"1px solid #fbbf2440",borderRadius:10,padding:"20px",marginBottom:16}}>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>Current Balance</div>
-            <div style={{fontSize:40,fontWeight:700,color:"#fbbf24",letterSpacing:-1,lineHeight:1}}>
-              {currentBalance !== null ? fmt(pAmt(currentBalance, pseudo)) : "—"}
-            </div>
-          </div>
-          {starlingToken && (
-            <button onClick={onSync} disabled={bankSyncing} style={{background:"transparent",border:"1px solid #2a2d3e",borderRadius:6,color:bankSyncing?"#4b5563":"#60a5fa",fontSize:11,padding:"6px 12px",cursor:bankSyncing?"default":"pointer",fontFamily:"inherit",letterSpacing:1,marginTop:4}}>
-              {bankSyncing ? "Syncing…" : "↻ Sync"}
-            </button>
-          )}
+        <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>Current Balance</div>
+        <div style={{fontSize:40,fontWeight:700,color:"#fbbf24",letterSpacing:-1,lineHeight:1}}>
+          {currentBalance !== null && currentBalance > 0 ? fmt(pAmt(currentBalance, pseudo)) : "—"}
         </div>
-        {!starlingToken && <div style={{fontSize:11,color:"#4b5563",marginTop:8}}>Add your Starling token in Settings to sync the balance</div>}
+        <div style={{fontSize:11,color:"#4b5563",marginTop:8}}>
+          {!starlingToken ? "Add your Starling token in Settings to sync" : "Updated on Starling sync — use Settings to refresh"}
+        </div>
       </div>
 
       {/* Balance line chart */}

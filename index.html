@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.33</title>
+<title>Finance Tracker v3.34</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.33";
+  const APP_VERSION = "3.34";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -599,6 +599,51 @@ amount = price per single item.` }
       if (!res.ok) throw new Error(`Starling transactions failed (${res.status})`);
       const j = yield res.json();
       return j.feedItems || [];
+    });
+  }
+  function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAccountUid, proxyBase) {
+    return __async(this, null, function* () {
+      var _a, _b, _c, _d, _e;
+      const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+      const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+      if (savingsAccountUid) {
+        try {
+          const r = yield fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: hdr });
+          if (r.ok) {
+            const d = yield r.json();
+            const v = ((_d = (_c = (_a = d.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = d.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
+            if (v > 0) return v;
+          }
+        } catch (e) {
+        }
+      }
+      try {
+        const r = yield fetch(`${base}/account/${primaryAccountUid}/savings-goals`, { headers: hdr });
+        if (r.ok) {
+          const d = yield r.json();
+          const goals = d.savingsGoalList || [];
+          const best = goals.find((g) => /easy saver/i.test(g.name)) || goals[0];
+          if (best) {
+            const v = (((_e = best.totalSaved) == null ? void 0 : _e.minorUnits) || 0) / 100;
+            if (v > 0) return v;
+          }
+        }
+      } catch (e) {
+      }
+      try {
+        const r = yield fetch(`${base}/account/${primaryAccountUid}/spaces`, { headers: hdr });
+        if (r.ok) {
+          const d = yield r.json();
+          const spaces = [...d.savingsGoals || [], ...d.savingsSpaces || []];
+          const total = spaces.reduce((s, sp) => {
+            var _a2, _b2;
+            return s + (((_a2 = sp.totalSaved) == null ? void 0 : _a2.minorUnits) || ((_b2 = sp.balance) == null ? void 0 : _b2.minorUnits) || 0);
+          }, 0) / 100;
+          if (total > 0) return total;
+        }
+      } catch (e) {
+      }
+      return null;
     });
   }
   function merchantNameToLogoUrl(name) {
@@ -1324,7 +1369,7 @@ root.render(React.createElement(App));
     }
     function syncStarling() {
       return __async(this, null, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+        var _a, _b, _c, _d, _e;
         if (bankSyncing) return;
         setBankSyncing(true);
         try {
@@ -1336,16 +1381,10 @@ root.render(React.createElement(App));
             const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
             setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
           }
-          if (savingsAccountUid) {
-            const savBalRes = yield fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
-            if (savBalRes.ok) {
-              const savBalData = yield savBalRes.json();
-              const savBal = ((_h = (_g = (_e = savBalData.effectiveBalance) == null ? void 0 : _e.minorUnits) != null ? _g : (_f = savBalData.clearedBalance) == null ? void 0 : _f.minorUnits) != null ? _h : 0) / 100;
-              setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
-            }
-          }
+          const savBal = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+          if (savBal !== null) setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
           const existing = transactions.filter((t) => t.accountId === "main");
-          const lastDate = (_i = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _i.date;
+          const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
           const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
           const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
           const existingIds = new Set(transactions.map((t) => t.id));
@@ -1388,16 +1427,8 @@ root.render(React.createElement(App));
                 const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
                 setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
               }
-              if (savingsAccountUid) {
-                const savBalRes = yield fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
-                if (savBalRes.ok) {
-                  const savBalData = yield savBalRes.json();
-                  setManualBalances((prev) => {
-                    var _a2, _b2, _c2, _d2;
-                    return __spreadProps(__spreadValues({}, prev), { savings: ((_d2 = (_c2 = (_a2 = savBalData.effectiveBalance) == null ? void 0 : _a2.minorUnits) != null ? _c2 : (_b2 = savBalData.clearedBalance) == null ? void 0 : _b2.minorUnits) != null ? _d2 : 0) / 100 });
-                  });
-                }
-              }
+              const savBal = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+              if (savBal !== null) setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
               const existing = transactions.filter((t) => t.accountId === "main");
               const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
               const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
@@ -1740,9 +1771,7 @@ root.render(React.createElement(App));
       {
         transactions,
         manualBalances,
-        starlingToken,
-        bankSyncing,
-        onSync: syncStarling
+        starlingToken
       }
     ), view === "insights" && /* @__PURE__ */ React.createElement(
       InsightsView,
@@ -2887,7 +2916,7 @@ root.render(React.createElement(App));
     const icons = ["\u{1F3E6}", "\u{1F4B3}", "\u{1F6D2}", "\u{1F4B0}", "\u{1F3E0}", "\u{1F697}", "\u{1F4F1}", "\u{1F4BC}"];
     return /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", inset: 0, background: "#000000cc", zIndex: 100, display: "flex", alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: "16px 16px 0 0", width: "100%", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, letterSpacing: 1 } }, "ADD ACCOUNT"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { background: "none", border: "none", color: "#4b5563", fontSize: 20, cursor: "pointer" } }, "\u2715")), /* @__PURE__ */ React.createElement("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Account name", style: { width: "100%", background: "#1c1f2e", border: "1.5px solid #2a2d3a", borderRadius: 8, padding: "10px 12px", color: "#e2e4ec", fontSize: 13, marginBottom: 12, boxSizing: "border-box", outline: "none" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" } }, ["current", "savings", "credit", "cash"].map((t) => /* @__PURE__ */ React.createElement("button", { key: t, onClick: () => setType(t), style: { background: type === t ? "#60a5fa20" : "#1c1f2e", border: `1px solid ${type === t ? "#60a5fa" : "#2a2d3a"}`, color: type === t ? "#60a5fa" : "#4b5563", borderRadius: 6, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase" } }, t))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12 } }, colors.map((c) => /* @__PURE__ */ React.createElement("button", { key: c, onClick: () => setColor(c), style: { width: 28, height: 28, borderRadius: "50%", background: c, border: `2px solid ${color === c ? "#fff" : "transparent"}`, cursor: "pointer" } }))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 16 } }, icons.map((ic) => /* @__PURE__ */ React.createElement("button", { key: ic, onClick: () => setIcon(ic), style: { width: 36, height: 36, borderRadius: 8, background: icon === ic ? "#60a5fa20" : "#1c1f2e", border: `1px solid ${icon === ic ? "#60a5fa" : "#2a2d3a"}`, fontSize: 18, cursor: "pointer" } }, ic))), /* @__PURE__ */ React.createElement("button", { onClick: () => name && onSave({ id: uid(), name, type, color, icon }), style: { width: "100%", background: name ? "#4ade80" : "#1c1f2e", border: "none", color: name ? "#0a0b0f" : "#4b5563", borderRadius: 8, padding: 14, fontWeight: 700, fontSize: 13, cursor: name ? "pointer" : "default", letterSpacing: 1 } }, "ADD ACCOUNT")));
   }
-  function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing, onSync }) {
+  function SavingsView({ transactions, manualBalances, starlingToken }) {
     var _a, _b, _c, _d, _e;
     const pseudo = useContext(PseudoCtx);
     const savingsTxns = useMemo(
@@ -2969,7 +2998,7 @@ root.render(React.createElement(App));
       }));
       return { svgPoints: pts, polylineStr: pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: snappedMin, maxBal: snappedMax };
     }, [displayHistory]);
-    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Easy Saver \u2014 Starling"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #fbbf2440", borderRadius: 10, padding: "20px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "Current Balance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, fontWeight: 700, color: "#fbbf24", letterSpacing: -1, lineHeight: 1 } }, currentBalance !== null ? fmt(pAmt(currentBalance, pseudo)) : "\u2014")), starlingToken && /* @__PURE__ */ React.createElement("button", { onClick: onSync, disabled: bankSyncing, style: { background: "transparent", border: "1px solid #2a2d3e", borderRadius: 6, color: bankSyncing ? "#4b5563" : "#60a5fa", fontSize: 11, padding: "6px 12px", cursor: bankSyncing ? "default" : "pointer", fontFamily: "inherit", letterSpacing: 1, marginTop: 4 } }, bankSyncing ? "Syncing\u2026" : "\u21BB Sync")), !starlingToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginTop: 8 } }, "Add your Starling token in Settings to sync the balance")), svgPoints.length >= 2 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Balance History"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "10px 12px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: H, display: "block" } }, [0, 1, 2, 3].map((i) => {
+    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Easy Saver \u2014 Starling"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #fbbf2440", borderRadius: 10, padding: "20px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "Current Balance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, fontWeight: 700, color: "#fbbf24", letterSpacing: -1, lineHeight: 1 } }, currentBalance !== null && currentBalance > 0 ? fmt(pAmt(currentBalance, pseudo)) : "\u2014"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginTop: 8 } }, !starlingToken ? "Add your Starling token in Settings to sync" : "Updated on Starling sync \u2014 use Settings to refresh")), svgPoints.length >= 2 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Balance History"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "10px 12px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: H, display: "block" } }, [0, 1, 2, 3].map((i) => {
       const frac = i / 3;
       const val = minBal + frac * (maxBal - minBal);
       const y = PT + (1 - frac) * cH;
