@@ -471,9 +471,12 @@ async function starlingGetAccount(token, proxyBase) {
   });
   if (!res.ok) throw new Error(`Starling auth failed (${res.status}) — check your token`);
   const j = await res.json();
-  const acc = (j.accounts || []).find(a => a.accountType === "PRIMARY");
+  const all = j.accounts || [];
+  const acc = all.find(a => a.accountType === "PRIMARY");
   if (!acc) throw new Error("No primary Starling account found");
-  return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
+  // Easy Saver is a separate Starling account (not a savings goal), appears alongside PRIMARY
+  const savingsAcc = all.find(a => a.accountUid !== acc.accountUid);
+  return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory, savingsAccountUid: savingsAcc?.accountUid || null };
 }
 
 async function starlingFetchTransactions(token, accountUid, categoryUid, since, proxyBase) {
@@ -1148,7 +1151,7 @@ root.render(React.createElement(App));
     if (bankSyncing) return;
     setBankSyncing(true);
     try {
-      const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
+      const { accountUid, categoryUid, savingsAccountUid } = await starlingGetAccount(starlingToken, starlingProxy);
       const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
       const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
       if (balRes.ok) {
@@ -1156,12 +1159,14 @@ root.render(React.createElement(App));
         const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
         setManualBalances(prev => ({ ...prev, main: liveBal }));
       }
-      // Savings pot balance
-      const goals = await starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
-      const easySaver = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
-      if (easySaver) {
-        const potBal = (easySaver.totalSaved?.minorUnits || 0) / 100;
-        setManualBalances(prev => ({ ...prev, savings: potBal }));
+      // Easy Saver balance — it's a separate Starling account, not a savings goal
+      if (savingsAccountUid) {
+        const savBalRes = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+        if (savBalRes.ok) {
+          const savBalData = await savBalRes.json();
+          const savBal = (savBalData.effectiveBalance?.minorUnits ?? savBalData.clearedBalance?.minorUnits ?? 0) / 100;
+          setManualBalances(prev => ({ ...prev, savings: savBal }));
+        }
       }
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
@@ -1191,8 +1196,8 @@ root.render(React.createElement(App));
     try {
       if (starlingToken) {
         try {
-          const { accountUid, categoryUid } = await starlingGetAccount(starlingToken, starlingProxy);
-          console.log("[Starling] account", accountUid, "category", categoryUid);
+          const { accountUid, categoryUid, savingsAccountUid } = await starlingGetAccount(starlingToken, starlingProxy);
+          console.log("[Starling] account", accountUid, "category", categoryUid, "savings", savingsAccountUid);
           const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
           const balRes = await fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
           if (balRes.ok) {
@@ -1200,10 +1205,14 @@ root.render(React.createElement(App));
             const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
             setManualBalances(prev => ({ ...prev, main: liveBal }));
           }
-          // Savings pot balance
-          const goals = await starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
-          const easySaver = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
-          if (easySaver) setManualBalances(prev => ({ ...prev, savings: (easySaver.totalSaved?.minorUnits || 0) / 100 }));
+          // Easy Saver balance — separate Starling account
+          if (savingsAccountUid) {
+            const savBalRes = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+            if (savBalRes.ok) {
+              const savBalData = await savBalRes.json();
+              setManualBalances(prev => ({ ...prev, savings: (savBalData.effectiveBalance?.minorUnits ?? savBalData.clearedBalance?.minorUnits ?? 0) / 100 }));
+            }
+          }
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate
@@ -1406,7 +1415,7 @@ root.render(React.createElement(App));
           <div>
             <div style={{display:"flex",alignItems:"baseline",gap:8}}>
               <div style={{fontSize:10,letterSpacing:4,color:"#60a5fa",textTransform:"uppercase",fontWeight:700}}>Finance</div>
-              <div style={{fontSize:9,color:"#2a2d3e",fontWeight:700,letterSpacing:1}}>v{APP_VERSION}</div>
+              <div style={{fontSize:9,color:"#4b5563",fontWeight:700,letterSpacing:1}}>v{APP_VERSION}</div>
             </div>
             <div style={{fontSize:20,fontWeight:700,letterSpacing:-0.5,marginTop:1}}>Overview</div>
           </div>

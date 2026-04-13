@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.32</title>
+<title>Finance Tracker v3.33</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.32";
+  const APP_VERSION = "3.33";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -582,9 +582,11 @@ amount = price per single item.` }
       });
       if (!res.ok) throw new Error(`Starling auth failed (${res.status}) \u2014 check your token`);
       const j = yield res.json();
-      const acc = (j.accounts || []).find((a) => a.accountType === "PRIMARY");
+      const all = j.accounts || [];
+      const acc = all.find((a) => a.accountType === "PRIMARY");
       if (!acc) throw new Error("No primary Starling account found");
-      return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory };
+      const savingsAcc = all.find((a) => a.accountUid !== acc.accountUid);
+      return { accountUid: acc.accountUid, categoryUid: acc.defaultCategory, savingsAccountUid: (savingsAcc == null ? void 0 : savingsAcc.accountUid) || null };
     });
   }
   function starlingFetchTransactions(token, accountUid, categoryUid, since, proxyBase) {
@@ -597,21 +599,6 @@ amount = price per single item.` }
       if (!res.ok) throw new Error(`Starling transactions failed (${res.status})`);
       const j = yield res.json();
       return j.feedItems || [];
-    });
-  }
-  function starlingFetchSavingsGoals(token, accountUid, proxyBase) {
-    return __async(this, null, function* () {
-      const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
-      try {
-        const res = yield fetch(`${base}/account/${accountUid}/savings-goals`, {
-          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
-        });
-        if (!res.ok) return [];
-        const j = yield res.json();
-        return j.savingsGoalList || [];
-      } catch (e) {
-        return [];
-      }
     });
   }
   function merchantNameToLogoUrl(name) {
@@ -1337,11 +1324,11 @@ root.render(React.createElement(App));
     }
     function syncStarling() {
       return __async(this, null, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i;
         if (bankSyncing) return;
         setBankSyncing(true);
         try {
-          const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken, starlingProxy);
+          const { accountUid, categoryUid, savingsAccountUid } = yield starlingGetAccount(starlingToken, starlingProxy);
           const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
           const balRes = yield fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
           if (balRes.ok) {
@@ -1349,14 +1336,16 @@ root.render(React.createElement(App));
             const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
             setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
           }
-          const goals = yield starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
-          const easySaver = goals.find((g) => /easy saver/i.test(g.name)) || goals[0];
-          if (easySaver) {
-            const potBal = (((_e = easySaver.totalSaved) == null ? void 0 : _e.minorUnits) || 0) / 100;
-            setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: potBal }));
+          if (savingsAccountUid) {
+            const savBalRes = yield fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+            if (savBalRes.ok) {
+              const savBalData = yield savBalRes.json();
+              const savBal = ((_h = (_g = (_e = savBalData.effectiveBalance) == null ? void 0 : _e.minorUnits) != null ? _g : (_f = savBalData.clearedBalance) == null ? void 0 : _f.minorUnits) != null ? _h : 0) / 100;
+              setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
+            }
           }
           const existing = transactions.filter((t) => t.accountId === "main");
-          const lastDate = (_f = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _f.date;
+          const lastDate = (_i = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _i.date;
           const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
           const raw = yield starlingFetchTransactions(starlingToken, accountUid, categoryUid, since, starlingProxy);
           const existingIds = new Set(transactions.map((t) => t.id));
@@ -1390,8 +1379,8 @@ root.render(React.createElement(App));
         try {
           if (starlingToken) {
             try {
-              const { accountUid, categoryUid } = yield starlingGetAccount(starlingToken, starlingProxy);
-              console.log("[Starling] account", accountUid, "category", categoryUid);
+              const { accountUid, categoryUid, savingsAccountUid } = yield starlingGetAccount(starlingToken, starlingProxy);
+              console.log("[Starling] account", accountUid, "category", categoryUid, "savings", savingsAccountUid);
               const base = starlingProxy ? starlingProxy.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
               const balRes = yield fetch(`${base}/accounts/${accountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
               if (balRes.ok) {
@@ -1399,12 +1388,16 @@ root.render(React.createElement(App));
                 const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
                 setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
               }
-              const goals = yield starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
-              const easySaver = goals.find((g) => /easy saver/i.test(g.name)) || goals[0];
-              if (easySaver) setManualBalances((prev) => {
-                var _a2;
-                return __spreadProps(__spreadValues({}, prev), { savings: (((_a2 = easySaver.totalSaved) == null ? void 0 : _a2.minorUnits) || 0) / 100 });
-              });
+              if (savingsAccountUid) {
+                const savBalRes = yield fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: { Authorization: `Bearer ${starlingToken}`, Accept: "application/json" } });
+                if (savBalRes.ok) {
+                  const savBalData = yield savBalRes.json();
+                  setManualBalances((prev) => {
+                    var _a2, _b2, _c2, _d2;
+                    return __spreadProps(__spreadValues({}, prev), { savings: ((_d2 = (_c2 = (_a2 = savBalData.effectiveBalance) == null ? void 0 : _a2.minorUnits) != null ? _c2 : (_b2 = savBalData.clearedBalance) == null ? void 0 : _b2.minorUnits) != null ? _d2 : 0) / 100 });
+                  });
+                }
+              }
               const existing = transactions.filter((t) => t.accountId === "main");
               const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
               const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
@@ -1634,7 +1627,7 @@ root.render(React.createElement(App));
         setGmailSyncing(false);
       });
     }
-    return /* @__PURE__ */ React.createElement(PseudoCtx.Provider, { value: pseudo }, " ", /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#2a2d3e", fontWeight: 700, letterSpacing: 1 } }, "v", APP_VERSION)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setPseudo((p) => p.on ? { on: false, factor: 1 } : { on: true, factor: 0.3 + Math.random() * 0.25 }), title: pseudo.on ? "Exit demo mode" : "Demo mode \u2014 hides real amounts & names", style: { background: pseudo.on ? "#a78bfa20" : "#1c1f2e", border: `1px solid ${pseudo.on ? "#a78bfa60" : "#2a2d3a"}`, color: pseudo.on ? "#a78bfa" : "#4b5563", borderRadius: 8, padding: "8px 10px", fontSize: 13, cursor: "pointer" } }, pseudo.on ? "\u{1F513}" : "\u{1F512}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setReceiptModal({ step: "upload", pinnedTxId: null, queue: [], currentIdx: 0 }), style: { background: "#fbbf2415", border: "1px solid #fbbf2440", color: "#fbbf24", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u{1F9FE}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
+    return /* @__PURE__ */ React.createElement(PseudoCtx.Provider, { value: pseudo }, " ", /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: "#0a0b0f", color: "#e2e4ec", fontFamily: "'DM Mono','Fira Mono',monospace", paddingBottom: 80 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", borderBottom: "1px solid #1c1f2e", padding: "18px 16px 0", position: "sticky", top: 0, zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, letterSpacing: 4, color: "#60a5fa", textTransform: "uppercase", fontWeight: 700 } }, "Finance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", fontWeight: 700, letterSpacing: 1 } }, "v", APP_VERSION)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, letterSpacing: -0.5, marginTop: 1 } }, "Overview")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setPseudo((p) => p.on ? { on: false, factor: 1 } : { on: true, factor: 0.3 + Math.random() * 0.25 }), title: pseudo.on ? "Exit demo mode" : "Demo mode \u2014 hides real amounts & names", style: { background: pseudo.on ? "#a78bfa20" : "#1c1f2e", border: `1px solid ${pseudo.on ? "#a78bfa60" : "#2a2d3a"}`, color: pseudo.on ? "#a78bfa" : "#4b5563", borderRadius: 8, padding: "8px 10px", fontSize: 13, cursor: "pointer" } }, pseudo.on ? "\u{1F513}" : "\u{1F512}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "rules" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "RULES"), /* @__PURE__ */ React.createElement("button", { onClick: exportHTML, style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u2193 HTML"), /* @__PURE__ */ React.createElement("button", { onClick: () => setReceiptModal({ step: "upload", pinnedTxId: null, queue: [], currentIdx: 0 }), style: { background: "#fbbf2415", border: "1px solid #fbbf2440", color: "#fbbf24", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u{1F9FE}"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#1c1f2e", border: "1px solid #2a2d3a", color: "#94a3b8", borderRadius: 8, padding: "8px 12px", fontSize: 14, cursor: "pointer" } }, "\u2699", gistToken && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8, marginLeft: 4, color: syncStatus === "synced" ? "#4ade80" : syncStatus === "error" ? "#f87171" : "#fbbf24", verticalAlign: "middle" } }, syncStatus === "syncing" ? "\u27F3" : "\u25CF")), monzoStatus === "expired" && /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "settings" }), style: { background: "#f8717115", border: "1px solid #f8717140", color: "#f87171", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "\u26A0 RECONNECT"), /* @__PURE__ */ React.createElement("button", { onClick: () => setModal({ type: "import" }), style: { background: "#60a5fa15", border: "1px solid #60a5fa40", color: "#60a5fa", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 } }, "+ CSV"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 10, scrollbarWidth: "none" } }, accounts.map((a) => /* @__PURE__ */ React.createElement("button", { key: a.id, onClick: () => setActiveAccounts((prev) => prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]), style: {
       background: activeAccounts.includes(a.id) ? a.color + "22" : "#1c1f2e",
       border: `1.5px solid ${activeAccounts.includes(a.id) ? a.color : "#1c1f2e"}`,
       color: activeAccounts.includes(a.id) ? a.color : "#4b5563",
