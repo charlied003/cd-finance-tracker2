@@ -3174,24 +3174,64 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
 
   const maxNetAbs = Math.max(...monthlyData.map(d => Math.abs(d.net)), 1);
 
-  // SVG line chart geometry
-  const W = 320, H = 110, PL = 10, PR = 10, PT = 10, PB = 22;
+  // Seeded LCG — deterministic fake data keyed on pseudo.factor so it's stable per session
+  function makeRand(seed) {
+    let s = Math.abs(Math.round(seed * 1e9)) | 1;
+    return () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; };
+  }
+
+  // In demo mode replace balance history with a completely fake random walk
+  const displayHistory = useMemo(() => {
+    if (!pseudo.on) return balanceHistory;
+    const rand = makeRand(pseudo.factor);
+    const n = 18;
+    let bal = 600 + rand() * 2000;
+    const now = new Date();
+    return Array.from({ length: n }, (_, i) => {
+      const daysAgo = Math.round(((n - 1 - i) / (n - 1)) * 180);
+      const date = new Date(now.getTime() - daysAgo * 86400000).toISOString().slice(0, 10);
+      bal = Math.max(100, bal + (rand() - 0.28) * 400); // slight upward bias
+      return { date, balance: Math.round(bal) };
+    });
+  }, [pseudo.on, pseudo.factor, balanceHistory]);
+
+  // In demo mode replace monthly bar data with fake amounts (same month labels)
+  const displayMonthly = useMemo(() => {
+    if (!pseudo.on) return monthlyData;
+    const rand = makeRand(pseudo.factor + 0.5);
+    return monthlyData.map(d => {
+      const added = 100 + rand() * 500;
+      const withdrawn = rand() * 200;
+      return { ...d, added, withdrawn, net: added - withdrawn };
+    });
+  }, [pseudo.on, pseudo.factor, monthlyData]);
+
+  const displayMaxNetAbs = Math.max(...displayMonthly.map(d => Math.abs(d.net)), 1);
+
+  // SVG line chart geometry — wider left pad for Y-axis labels
+  const W = 320, H = 130, PL = 52, PR = 10, PT = 12, PB = 22;
   const cW = W - PL - PR, cH = H - PT - PB;
+  const fmtY = (v) => v >= 1000 ? `£${(v / 1000).toFixed(1)}k` : `£${Math.round(v)}`;
 
   const { svgPoints, polylineStr, minBal, maxBal } = useMemo(() => {
-    if (balanceHistory.length < 2) return { svgPoints: [], polylineStr: "", minBal: 0, maxBal: 0 };
-    const vals = balanceHistory.map(p => p.balance);
+    if (displayHistory.length < 2) return { svgPoints: [], polylineStr: "", minBal: 0, maxBal: 0 };
+    const vals = displayHistory.map(p => p.balance);
     const minV = Math.min(...vals);
     const maxV = Math.max(...vals, minV + 1);
-    const n = balanceHistory.length;
-    const pts = balanceHistory.map((p, i) => ({
+    // Snap to clean numbers for Y-axis readability
+    const range = maxV - minV;
+    const snap = Math.pow(10, Math.floor(Math.log10(range || 1)));
+    const snappedMin = Math.floor(minV / snap) * snap;
+    const snappedMax = Math.ceil(maxV / snap) * snap;
+    const n = displayHistory.length;
+    const pts = displayHistory.map((p, i) => ({
       x: PL + (i / (n - 1)) * cW,
-      y: PT + (1 - (p.balance - minV) / (maxV - minV)) * cH,
+      y: PT + (1 - (p.balance - snappedMin) / (snappedMax - snappedMin)) * cH,
       balance: p.balance,
       date: p.date,
     }));
-    return { svgPoints: pts, polylineStr: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: minV, maxBal: maxV };
-  }, [balanceHistory]);
+    return { svgPoints: pts, polylineStr: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: snappedMin, maxBal: snappedMax };
+  }, [displayHistory]);
 
   return (
     <div>
@@ -3219,12 +3259,22 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
       {svgPoints.length >= 2 && (
         <>
           <SectionLabel>Balance History</SectionLabel>
-          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"12px 16px",marginBottom:16}}>
+          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"10px 12px",marginBottom:16}}>
             <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}}>
-              {/* Subtle grid */}
-              {[0.25,0.5,0.75].map(f => (
-                <line key={f} x1={PL} x2={W-PR} y1={PT+f*cH} y2={PT+f*cH} stroke="#1c1f2e" strokeWidth="1"/>
-              ))}
+              {/* Y-axis ticks at 0%, 33%, 66%, 100% */}
+              {[0,1,2,3].map(i => {
+                const frac = i / 3;
+                const val = minBal + frac * (maxBal - minBal);
+                const y = PT + (1 - frac) * cH;
+                return (
+                  <g key={i}>
+                    <line x1={PL-3} x2={W-PR} y1={y} y2={y} stroke={i===0?"#2a2d3e":"#1c1f2e"} strokeWidth="1"/>
+                    <text x={PL-6} y={y+3} fontSize="8" fill="#4b5563" textAnchor="end">{fmtY(val)}</text>
+                  </g>
+                );
+              })}
+              {/* Y-axis line */}
+              <line x1={PL} x2={PL} y1={PT} y2={PT+cH} stroke="#2a2d3e" strokeWidth="1"/>
               {/* Area fill */}
               <polygon
                 points={`${PL},${PT+cH} ${polylineStr} ${W-PR},${PT+cH}`}
@@ -3234,11 +3284,9 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
               <polyline points={polylineStr} fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
               {/* Current balance dot */}
               <circle cx={svgPoints[svgPoints.length-1].x} cy={svgPoints[svgPoints.length-1].y} r="4" fill="#fbbf24"/>
-              {/* Labels */}
-              <text x={PL} y={H-2} fontSize="8" fill="#4b5563">{balanceHistory[0]?.date?.slice(0,7)}</text>
-              <text x={W-PR} y={H-2} fontSize="8" fill="#4b5563" textAnchor="end">{balanceHistory[balanceHistory.length-1]?.date?.slice(0,7)}</text>
-              <text x={PL+2} y={PT+cH-2} fontSize="8" fill="#4b5563">{fmt(pAmt(minBal,pseudo))}</text>
-              <text x={PL+2} y={PT+10} fontSize="8" fill="#fbbf24">{fmt(pAmt(maxBal,pseudo))}</text>
+              {/* X-axis date labels */}
+              <text x={PL} y={H-2} fontSize="8" fill="#4b5563">{displayHistory[0]?.date?.slice(0,7)}</text>
+              <text x={W-PR} y={H-2} fontSize="8" fill="#4b5563" textAnchor="end">{displayHistory[displayHistory.length-1]?.date?.slice(0,7)}</text>
             </svg>
           </div>
         </>
@@ -3248,9 +3296,9 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
       <SectionLabel>Monthly Net Change — last 6 months</SectionLabel>
       <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"16px",marginBottom:16}}>
         <div style={{display:"flex",alignItems:"flex-end",gap:6,height:100}}>
-          {monthlyData.map(d => {
+          {displayMonthly.map(d => {
             const isPos = d.net >= 0;
-            const barH = Math.max((Math.abs(d.net) / maxNetAbs) * 72, d.net !== 0 ? 3 : 0);
+            const barH = Math.max((Math.abs(d.net) / displayMaxNetAbs) * 72, d.net !== 0 ? 3 : 0);
             return (
               <div key={d.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
                 <div style={{fontSize:8,color:isPos?"#4ade80":"#f87171",fontWeight:700,minHeight:12,textAlign:"center",lineHeight:1.2}}>
@@ -3265,11 +3313,11 @@ function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing,
         <div style={{display:"flex",justifyContent:"space-between",marginTop:12,paddingTop:8,borderTop:"1px solid #1c1f2e"}}>
           <div>
             <div style={{fontSize:9,color:"#4b5563",letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Added (6 mo)</div>
-            <div style={{fontSize:14,fontWeight:700,color:"#4ade80"}}>+{fmt(pAmt(monthlyData.reduce((s,d)=>s+d.added,0),pseudo))}</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#4ade80"}}>+{fmt(pAmt(displayMonthly.reduce((s,d)=>s+d.added,0),pseudo))}</div>
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:9,color:"#4b5563",letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Withdrawn (6 mo)</div>
-            <div style={{fontSize:14,fontWeight:700,color:"#f87171"}}>{fmt(pAmt(monthlyData.reduce((s,d)=>s+d.withdrawn,0),pseudo))}</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#f87171"}}>{fmt(pAmt(displayMonthly.reduce((s,d)=>s+d.withdrawn,0),pseudo))}</div>
           </div>
         </div>
       </div>

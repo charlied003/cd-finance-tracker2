@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.30</title>
+<title>Finance Tracker v3.31</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.30";
+  const APP_VERSION = "3.31";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -2921,33 +2921,73 @@ root.render(React.createElement(App));
       });
     }, [savingsTxns]);
     const maxNetAbs = Math.max(...monthlyData.map((d) => Math.abs(d.net)), 1);
-    const W = 320, H = 110, PL = 10, PR = 10, PT = 10, PB = 22;
+    function makeRand(seed) {
+      let s = Math.abs(Math.round(seed * 1e9)) | 1;
+      return () => {
+        s = s * 1664525 + 1013904223 & 4294967295;
+        return (s >>> 0) / 4294967295;
+      };
+    }
+    const displayHistory = useMemo(() => {
+      if (!pseudo.on) return balanceHistory;
+      const rand = makeRand(pseudo.factor);
+      const n = 18;
+      let bal = 600 + rand() * 2e3;
+      const now = /* @__PURE__ */ new Date();
+      return Array.from({ length: n }, (_, i) => {
+        const daysAgo = Math.round((n - 1 - i) / (n - 1) * 180);
+        const date = new Date(now.getTime() - daysAgo * 864e5).toISOString().slice(0, 10);
+        bal = Math.max(100, bal + (rand() - 0.28) * 400);
+        return { date, balance: Math.round(bal) };
+      });
+    }, [pseudo.on, pseudo.factor, balanceHistory]);
+    const displayMonthly = useMemo(() => {
+      if (!pseudo.on) return monthlyData;
+      const rand = makeRand(pseudo.factor + 0.5);
+      return monthlyData.map((d) => {
+        const added = 100 + rand() * 500;
+        const withdrawn = rand() * 200;
+        return __spreadProps(__spreadValues({}, d), { added, withdrawn, net: added - withdrawn });
+      });
+    }, [pseudo.on, pseudo.factor, monthlyData]);
+    const displayMaxNetAbs = Math.max(...displayMonthly.map((d) => Math.abs(d.net)), 1);
+    const W = 320, H = 130, PL = 52, PR = 10, PT = 12, PB = 22;
     const cW = W - PL - PR, cH = H - PT - PB;
+    const fmtY = (v) => v >= 1e3 ? `\xA3${(v / 1e3).toFixed(1)}k` : `\xA3${Math.round(v)}`;
     const { svgPoints, polylineStr, minBal, maxBal } = useMemo(() => {
-      if (balanceHistory.length < 2) return { svgPoints: [], polylineStr: "", minBal: 0, maxBal: 0 };
-      const vals = balanceHistory.map((p) => p.balance);
+      if (displayHistory.length < 2) return { svgPoints: [], polylineStr: "", minBal: 0, maxBal: 0 };
+      const vals = displayHistory.map((p) => p.balance);
       const minV = Math.min(...vals);
       const maxV = Math.max(...vals, minV + 1);
-      const n = balanceHistory.length;
-      const pts = balanceHistory.map((p, i) => ({
+      const range = maxV - minV;
+      const snap = Math.pow(10, Math.floor(Math.log10(range || 1)));
+      const snappedMin = Math.floor(minV / snap) * snap;
+      const snappedMax = Math.ceil(maxV / snap) * snap;
+      const n = displayHistory.length;
+      const pts = displayHistory.map((p, i) => ({
         x: PL + i / (n - 1) * cW,
-        y: PT + (1 - (p.balance - minV) / (maxV - minV)) * cH,
+        y: PT + (1 - (p.balance - snappedMin) / (snappedMax - snappedMin)) * cH,
         balance: p.balance,
         date: p.date
       }));
-      return { svgPoints: pts, polylineStr: pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: minV, maxBal: maxV };
-    }, [balanceHistory]);
-    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Easy Saver \u2014 Starling"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #fbbf2440", borderRadius: 10, padding: "20px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "Current Balance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, fontWeight: 700, color: "#fbbf24", letterSpacing: -1, lineHeight: 1 } }, currentBalance !== null ? fmt(pAmt(currentBalance, pseudo)) : "\u2014")), starlingToken && /* @__PURE__ */ React.createElement("button", { onClick: onSync, disabled: bankSyncing, style: { background: "transparent", border: "1px solid #2a2d3e", borderRadius: 6, color: bankSyncing ? "#4b5563" : "#60a5fa", fontSize: 11, padding: "6px 12px", cursor: bankSyncing ? "default" : "pointer", fontFamily: "inherit", letterSpacing: 1, marginTop: 4 } }, bankSyncing ? "Syncing\u2026" : "\u21BB Sync")), !starlingToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginTop: 8 } }, "Add your Starling token in Settings to sync the balance")), svgPoints.length >= 2 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Balance History"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "12px 16px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: H, display: "block" } }, [0.25, 0.5, 0.75].map((f) => /* @__PURE__ */ React.createElement("line", { key: f, x1: PL, x2: W - PR, y1: PT + f * cH, y2: PT + f * cH, stroke: "#1c1f2e", strokeWidth: "1" })), /* @__PURE__ */ React.createElement(
+      return { svgPoints: pts, polylineStr: pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: snappedMin, maxBal: snappedMax };
+    }, [displayHistory]);
+    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Easy Saver \u2014 Starling"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #fbbf2440", borderRadius: 10, padding: "20px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 } }, "Current Balance"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 40, fontWeight: 700, color: "#fbbf24", letterSpacing: -1, lineHeight: 1 } }, currentBalance !== null ? fmt(pAmt(currentBalance, pseudo)) : "\u2014")), starlingToken && /* @__PURE__ */ React.createElement("button", { onClick: onSync, disabled: bankSyncing, style: { background: "transparent", border: "1px solid #2a2d3e", borderRadius: 6, color: bankSyncing ? "#4b5563" : "#60a5fa", fontSize: 11, padding: "6px 12px", cursor: bankSyncing ? "default" : "pointer", fontFamily: "inherit", letterSpacing: 1, marginTop: 4 } }, bankSyncing ? "Syncing\u2026" : "\u21BB Sync")), !starlingToken && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#4b5563", marginTop: 8 } }, "Add your Starling token in Settings to sync the balance")), svgPoints.length >= 2 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Balance History"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "10px 12px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: H, display: "block" } }, [0, 1, 2, 3].map((i) => {
+      const frac = i / 3;
+      const val = minBal + frac * (maxBal - minBal);
+      const y = PT + (1 - frac) * cH;
+      return /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("line", { x1: PL - 3, x2: W - PR, y1: y, y2: y, stroke: i === 0 ? "#2a2d3e" : "#1c1f2e", strokeWidth: "1" }), /* @__PURE__ */ React.createElement("text", { x: PL - 6, y: y + 3, fontSize: "8", fill: "#4b5563", textAnchor: "end" }, fmtY(val)));
+    }), /* @__PURE__ */ React.createElement("line", { x1: PL, x2: PL, y1: PT, y2: PT + cH, stroke: "#2a2d3e", strokeWidth: "1" }), /* @__PURE__ */ React.createElement(
       "polygon",
       {
         points: `${PL},${PT + cH} ${polylineStr} ${W - PR},${PT + cH}`,
         fill: "#fbbf2412"
       }
-    ), /* @__PURE__ */ React.createElement("polyline", { points: polylineStr, fill: "none", stroke: "#fbbf24", strokeWidth: "2", strokeLinejoin: "round", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: svgPoints[svgPoints.length - 1].x, cy: svgPoints[svgPoints.length - 1].y, r: "4", fill: "#fbbf24" }), /* @__PURE__ */ React.createElement("text", { x: PL, y: H - 2, fontSize: "8", fill: "#4b5563" }, (_c = (_b = balanceHistory[0]) == null ? void 0 : _b.date) == null ? void 0 : _c.slice(0, 7)), /* @__PURE__ */ React.createElement("text", { x: W - PR, y: H - 2, fontSize: "8", fill: "#4b5563", textAnchor: "end" }, (_e = (_d = balanceHistory[balanceHistory.length - 1]) == null ? void 0 : _d.date) == null ? void 0 : _e.slice(0, 7)), /* @__PURE__ */ React.createElement("text", { x: PL + 2, y: PT + cH - 2, fontSize: "8", fill: "#4b5563" }, fmt(pAmt(minBal, pseudo))), /* @__PURE__ */ React.createElement("text", { x: PL + 2, y: PT + 10, fontSize: "8", fill: "#fbbf24" }, fmt(pAmt(maxBal, pseudo)))))), /* @__PURE__ */ React.createElement(SectionLabel, null, "Monthly Net Change \u2014 last 6 months"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "16px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: 6, height: 100 } }, monthlyData.map((d) => {
+    ), /* @__PURE__ */ React.createElement("polyline", { points: polylineStr, fill: "none", stroke: "#fbbf24", strokeWidth: "2", strokeLinejoin: "round", strokeLinecap: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: svgPoints[svgPoints.length - 1].x, cy: svgPoints[svgPoints.length - 1].y, r: "4", fill: "#fbbf24" }), /* @__PURE__ */ React.createElement("text", { x: PL, y: H - 2, fontSize: "8", fill: "#4b5563" }, (_c = (_b = displayHistory[0]) == null ? void 0 : _b.date) == null ? void 0 : _c.slice(0, 7)), /* @__PURE__ */ React.createElement("text", { x: W - PR, y: H - 2, fontSize: "8", fill: "#4b5563", textAnchor: "end" }, (_e = (_d = displayHistory[displayHistory.length - 1]) == null ? void 0 : _d.date) == null ? void 0 : _e.slice(0, 7))))), /* @__PURE__ */ React.createElement(SectionLabel, null, "Monthly Net Change \u2014 last 6 months"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, padding: "16px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: 6, height: 100 } }, displayMonthly.map((d) => {
       const isPos = d.net >= 0;
-      const barH = Math.max(Math.abs(d.net) / maxNetAbs * 72, d.net !== 0 ? 3 : 0);
+      const barH = Math.max(Math.abs(d.net) / displayMaxNetAbs * 72, d.net !== 0 ? 3 : 0);
       return /* @__PURE__ */ React.createElement("div", { key: d.key, style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 8, color: isPos ? "#4ade80" : "#f87171", fontWeight: 700, minHeight: 12, textAlign: "center", lineHeight: 1.2 } }, d.net !== 0 ? (isPos ? "+" : "-") + fmt(pAmt(Math.abs(d.net), pseudo)) : ""), /* @__PURE__ */ React.createElement("div", { style: { width: "100%", borderRadius: "4px 4px 0 0", background: isPos ? "#4ade80" : "#f87171", height: `${barH}px`, transition: "height .4s" } }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 8, color: "#4b5563", textAlign: "center" } }, d.label));
-    })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 8, borderTop: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 } }, "Added (6 mo)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#4ade80" } }, "+", fmt(pAmt(monthlyData.reduce((s, d) => s + d.added, 0), pseudo)))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 } }, "Withdrawn (6 mo)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#f87171" } }, fmt(pAmt(monthlyData.reduce((s, d) => s + d.withdrawn, 0), pseudo)))))), savingsTxns.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Savings Movements"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, overflow: "hidden", marginBottom: 16 } }, [...savingsTxns].reverse().slice(0, 15).map((t, i, arr) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: i < arr.length - 1 ? "1px solid #1c1f2e" : "none" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#e2e4ec" } }, t.category === "Savings" ? "Transfer to pot" : "Transfer from pot"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, t.date)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: t.category === "Savings" ? "#4ade80" : "#f87171" } }, t.category === "Savings" ? "+" : "-", fmt(pAmt(Math.abs(t.amount), pseudo))))))), savingsTxns.length === 0 && currentBalance === null && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 0" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, marginBottom: 12 } }, "\u{1F3E6}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#94a3b8" } }, "No savings data yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563", marginTop: 6, lineHeight: 1.6 } }, "Sync Starling or import a CSV", /* @__PURE__ */ React.createElement("br", null), "to see your Easy Saver balance and history")));
+    })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 8, borderTop: "1px solid #1c1f2e" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 } }, "Added (6 mo)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#4ade80" } }, "+", fmt(pAmt(displayMonthly.reduce((s, d) => s + d.added, 0), pseudo)))), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 9, color: "#4b5563", letterSpacing: 1, textTransform: "uppercase", marginBottom: 2 } }, "Withdrawn (6 mo)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#f87171" } }, fmt(pAmt(displayMonthly.reduce((s, d) => s + d.withdrawn, 0), pseudo)))))), savingsTxns.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(SectionLabel, null, "Savings Movements"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #1c1f2e", borderRadius: 10, overflow: "hidden", marginBottom: 16 } }, [...savingsTxns].reverse().slice(0, 15).map((t, i, arr) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: i < arr.length - 1 ? "1px solid #1c1f2e" : "none" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#e2e4ec" } }, t.category === "Savings" ? "Transfer to pot" : "Transfer from pot"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#4b5563", marginTop: 2 } }, t.date)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: t.category === "Savings" ? "#4ade80" : "#f87171" } }, t.category === "Savings" ? "+" : "-", fmt(pAmt(Math.abs(t.amount), pseudo))))))), savingsTxns.length === 0 && currentBalance === null && /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "40px 0" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, marginBottom: 12 } }, "\u{1F3E6}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#94a3b8" } }, "No savings data yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563", marginTop: 6, lineHeight: 1.6 } }, "Sync Starling or import a CSV", /* @__PURE__ */ React.createElement("br", null), "to see your Easy Saver balance and history")));
   }
   function InsightsView({ transactions, periods, activeAccounts, cycleStart, periodLabel, displayPeriod, merchantRules }) {
     function applyRules(txns) {
