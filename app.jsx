@@ -313,7 +313,7 @@ function matchReceiptToTransaction(extracted, transactions) {
 const MONZO_CONFIG_KEY    = "finance-tracker-monzo-config";
 const STARLING_TOKEN_KEY  = "finance-tracker-starling-token";
 const STARLING_PROXY_KEY  = "finance-tracker-starling-proxy";
-const MERCHANT_LOGOS_KEY  = "finance-tracker-merchant-logos-v2"; // v2: keyed by display name, not raw description
+const MERCHANT_LOGOS_KEY  = "finance-tracker-merchant-logos-v3"; // v3: Clearbit URLs, no API calls
 const DEV_SERVICES_KEY    = "finance-tracker-dev-services";
 const AI_SCAN_COUNT_KEY   = "finance-tracker-ai-scans";
 const MONZO_ACCESS_KEY    = "finance-tracker-monzo-access";
@@ -480,64 +480,32 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
-// Derive a Clearbit logo URL from a raw merchant name alone (no API call).
-// "AMAZON.CO.UK" → clearbit/amazon.co.uk, "TESCO STORES 1234" → clearbit/tesco.com
+// Derive a Clearbit logo URL from a merchant display name — no API call needed.
+// "AMAZON.CO.UK" → clearbit/amazon.co.uk  |  "Tesco" → clearbit/tesco.com
 function merchantNameToLogoUrl(name) {
   if (!name) return null;
   const lower = name.toLowerCase().trim();
-  // If the first token already looks like a domain, use it directly
   const firstToken = lower.split(/\s+/)[0];
+  // If first word already looks like a domain (e.g. "amazon.co.uk"), use it directly
   if (/^[a-z0-9][a-z0-9-]+\.[a-z]{2,}(\.[a-z]{2})?$/.test(firstToken))
     return `https://logo.clearbit.com/${firstToken}`;
-  // Otherwise strip non-alpha and take first word as company name
+  // Otherwise strip non-alpha and use first word as company name → guess .com
   const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
   return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
 }
 
-// Fetch a logo URL for a Starling merchant UID.
-// Tries the merchant API for a direct logo/website, then falls back to name-based Clearbit.
-async function starlingFetchMerchantLogo(merchantUid, token, proxyBase, nameFallback) {
-  const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
-  try {
-    const res = await fetch(`${base}/merchant/${merchantUid}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
-    });
-    if (res.ok) {
-      const j = await res.json();
-      const m = j.merchant || j;
-      if (m.logo) return m.logo;
-      if (m.website) {
-        try {
-          const url = m.website.startsWith("http") ? m.website : `https://${m.website}`;
-          const domain = new URL(url).hostname.replace(/^www\./, "");
-          return `https://logo.clearbit.com/${domain}`;
-        } catch {}
-      }
-    }
-  } catch {}
-  // Fall back to name-based Clearbit guess
-  return nameFallback ? merchantNameToLogoUrl(nameFallback) : null;
-}
-
-// Fetch logos for a batch of transactions not already in the logo cache.
-// Handles both transactions with a merchantUid (Starling API + Clearbit) and without (name only).
-async function fetchNewStarlingLogos(txns, token, proxyBase, existingLogos) {
-  const withUid  = new Map(); // merchantUid → { k, name }
-  const nameOnly = new Map(); // k → name (no UID available)
+// Build a logo map for a batch of transactions not already in the cache.
+// Uses Clearbit URL derived from the display name — instant, no API calls.
+// The browser's onError on <img> will silently hide any that Clearbit doesn't know.
+function buildLogoMap(txns, existingLogos) {
+  const out = {};
   txns.forEach(t => {
     const k = merchantKey(t.description || "");
-    if (existingLogos[k]) return;
-    if (t.merchantUid && !withUid.has(t.merchantUid)) withUid.set(t.merchantUid, { k, name: t.description });
-    else if (!t.merchantUid && !nameOnly.has(k)) nameOnly.set(k, t.description);
+    if (!existingLogos[k] && !out[k]) {
+      const url = merchantNameToLogoUrl(t.description || "");
+      if (url) out[k] = url;
+    }
   });
-  const out = {};
-  // API-backed fetch (with Clearbit fallback inside)
-  await Promise.allSettled([...withUid.entries()].map(async ([uid, { k, name }]) => {
-    const logo = await starlingFetchMerchantLogo(uid, token, proxyBase, name);
-    if (logo) out[k] = logo;
-  }));
-  // Pure name-based Clearbit for transactions without a merchant UID
-  nameOnly.forEach((name, k) => { if (!out[k]) { const u = merchantNameToLogoUrl(name); if (u) out[k] = u; } });
   return out;
 }
 
@@ -942,25 +910,15 @@ const DEFAULT_RULES = {
     try { localStorage.setItem(MERCHANT_LOGOS_KEY, JSON.stringify(merchantLogos)); } catch {}
   }, [merchantLogos]);
 
-  // Background logo enrichment: on load, fetch logos for existing Starling transactions
-  // not yet in the cache. Runs once when transactions + token are ready. Capped at 40 merchants.
-  // Uses applyRules so keys match the display names shown in the spending tab.
+  // Background logo enrichment: on load, build Clearbit URLs for all Starling merchant names.
+  // Synchronous — no API calls. Browser onError hides any Clearbit misses silently.
   useEffect(() => {
-    if (!starlingToken || !transactions.length) return;
+    if (!transactions.length) return;
     const starlingTxns = applyRules(transactions.filter(t => t.accountId === "main"));
-    const uncached = [];
-    const seen = new Set();
-    for (const t of starlingTxns) {
-      const k = merchantKey(t.description || "");
-      if (!merchantLogos[k] && !seen.has(k)) { seen.add(k); uncached.push(t); }
-      if (uncached.length >= 40) break;
-    }
-    if (!uncached.length) return;
-    fetchNewStarlingLogos(uncached, starlingToken, starlingProxy, merchantLogos).then(newLogos => {
-      if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
-    });
+    const newLogos = buildLogoMap(starlingTxns, merchantLogos);
+    if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [starlingToken, transactions.length]);
+  }, [transactions.length]);
 
   // Debounced Gist sync — fires 2s after any change to syncable data
   useEffect(() => {
@@ -1205,10 +1163,8 @@ root.render(React.createElement(App));
         [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
       );
       showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-      // Fetch merchant logos — apply rules first so keys match display names in spending tab
-      fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then(newLogos => {
-        if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
-      });
+      const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
+      if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
     } catch(e) {
       showToast(e.message, "error");
     } finally {
@@ -1257,10 +1213,8 @@ root.render(React.createElement(App));
               setTransactions(prev =>
                 [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
               );
-              // Fetch merchant logos — apply rules first so keys match display names in spending tab
-              fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then(newLogos => {
-                if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
-              });
+              const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
+              if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
             }
           }
         } catch(e) {

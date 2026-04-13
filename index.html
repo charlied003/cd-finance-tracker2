@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.23</title>
+<title>Finance Tracker v3.24</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.23";
+  const APP_VERSION = "3.24";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -416,7 +416,7 @@ amount = price per single item.` }
   const MONZO_CONFIG_KEY = "finance-tracker-monzo-config";
   const STARLING_TOKEN_KEY = "finance-tracker-starling-token";
   const STARLING_PROXY_KEY = "finance-tracker-starling-proxy";
-  const MERCHANT_LOGOS_KEY = "finance-tracker-merchant-logos-v2";
+  const MERCHANT_LOGOS_KEY = "finance-tracker-merchant-logos-v3";
   const DEV_SERVICES_KEY = "finance-tracker-dev-services";
   const AI_SCAN_COUNT_KEY = "finance-tracker-ai-scans";
   const MONZO_ACCESS_KEY = "finance-tracker-monzo-access";
@@ -610,54 +610,16 @@ amount = price per single item.` }
     const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
     return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
   }
-  function starlingFetchMerchantLogo(merchantUid, token, proxyBase, nameFallback) {
-    return __async(this, null, function* () {
-      const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
-      try {
-        const res = yield fetch(`${base}/merchant/${merchantUid}`, {
-          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
-        });
-        if (res.ok) {
-          const j = yield res.json();
-          const m = j.merchant || j;
-          if (m.logo) return m.logo;
-          if (m.website) {
-            try {
-              const url = m.website.startsWith("http") ? m.website : `https://${m.website}`;
-              const domain = new URL(url).hostname.replace(/^www\./, "");
-              return `https://logo.clearbit.com/${domain}`;
-            } catch (e) {
-            }
-          }
-        }
-      } catch (e) {
+  function buildLogoMap(txns, existingLogos) {
+    const out = {};
+    txns.forEach((t) => {
+      const k = merchantKey(t.description || "");
+      if (!existingLogos[k] && !out[k]) {
+        const url = merchantNameToLogoUrl(t.description || "");
+        if (url) out[k] = url;
       }
-      return nameFallback ? merchantNameToLogoUrl(nameFallback) : null;
     });
-  }
-  function fetchNewStarlingLogos(txns, token, proxyBase, existingLogos) {
-    return __async(this, null, function* () {
-      const withUid = /* @__PURE__ */ new Map();
-      const nameOnly = /* @__PURE__ */ new Map();
-      txns.forEach((t) => {
-        const k = merchantKey(t.description || "");
-        if (existingLogos[k]) return;
-        if (t.merchantUid && !withUid.has(t.merchantUid)) withUid.set(t.merchantUid, { k, name: t.description });
-        else if (!t.merchantUid && !nameOnly.has(k)) nameOnly.set(k, t.description);
-      });
-      const out = {};
-      yield Promise.allSettled([...withUid.entries()].map((_0) => __async(null, [_0], function* ([uid2, { k, name }]) {
-        const logo = yield starlingFetchMerchantLogo(uid2, token, proxyBase, name);
-        if (logo) out[k] = logo;
-      })));
-      nameOnly.forEach((name, k) => {
-        if (!out[k]) {
-          const u = merchantNameToLogoUrl(name);
-          if (u) out[k] = u;
-        }
-      });
-      return out;
-    });
+    return out;
   }
   function starlingToInternal(item, idx) {
     var _a;
@@ -1148,23 +1110,11 @@ ${clean}` }]
       }
     }, [merchantLogos]);
     useEffect(() => {
-      if (!starlingToken || !transactions.length) return;
+      if (!transactions.length) return;
       const starlingTxns = applyRules(transactions.filter((t) => t.accountId === "main"));
-      const uncached = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const t of starlingTxns) {
-        const k = merchantKey(t.description || "");
-        if (!merchantLogos[k] && !seen.has(k)) {
-          seen.add(k);
-          uncached.push(t);
-        }
-        if (uncached.length >= 40) break;
-      }
-      if (!uncached.length) return;
-      fetchNewStarlingLogos(uncached, starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
-        if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
-      });
-    }, [starlingToken, transactions.length]);
+      const newLogos = buildLogoMap(starlingTxns, merchantLogos);
+      if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
+    }, [transactions.length]);
     useEffect(() => {
       if (!syncReady.current || !gistToken) return;
       setSyncStatus("syncing");
@@ -1434,9 +1384,8 @@ root.render(React.createElement(App));
             })
           );
           showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-          fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
-            if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
-          });
+          const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
+          if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
         } catch (e) {
           showToast(e.message, "error");
         } finally {
@@ -1489,9 +1438,8 @@ root.render(React.createElement(App));
                       return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
                     })
                   );
-                  fetchNewStarlingLogos(applyRules(fresh), starlingToken, starlingProxy, merchantLogos).then((newLogos) => {
-                    if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
-                  });
+                  const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
+                  if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
                 }
               }
             } catch (e) {
