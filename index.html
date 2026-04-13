@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.26</title>
+<title>Finance Tracker v3.27</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.26";
+  const APP_VERSION = "3.27";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -2147,6 +2147,16 @@ root.render(React.createElement(App));
   function merchantKey(name) {
     return name.toLowerCase().replace(/\.com(\/[^\s]*)?/, "").replace(/\.co\.uk/, "").replace(/\.net/, "").replace(/\.org/, "").replace(/\b(uk|ltd|limited|plc|payments|services|store|bill)\b/g, " ").replace(/[^a-z0-9]+/g, "").trim();
   }
+  const LOGO_DOMAIN_OVERRIDES = {
+    "spar": "spar-international.com"
+  };
+  const MERCHANT_EMOJIS = {
+    "cashmachine": "\u{1F3E7}",
+    "cashwithdrawal": "\u{1F3E7}",
+    "cashpoint": "\u{1F3E7}",
+    "atmwithdrawal": "\u{1F3E7}",
+    "atm": "\u{1F3E7}"
+  };
   function detectSubscriptions(allTxns) {
     const today = new Date(todayStr());
     const spending = allTxns.filter((t) => t.amount < 0 && !EXCLUDE_FROM_SPEND.includes(t.category || "Other"));
@@ -2230,6 +2240,11 @@ root.render(React.createElement(App));
       (allTransactions || []).forEach((t) => {
         const k = merchantKey(t.description || "");
         if (map[k]) return;
+        if (MERCHANT_EMOJIS[k]) return;
+        if (LOGO_DOMAIN_OVERRIDES[k]) {
+          map[k] = `https://www.google.com/s2/favicons?domain=${LOGO_DOMAIN_OVERRIDES[k]}&sz=64`;
+          return;
+        }
         if (t.logo) {
           map[k] = t.logo;
           return;
@@ -2443,7 +2458,14 @@ root.render(React.createElement(App));
       const dotColor = s.possiblyEnded ? "#4b5563" : overdue ? "#f87171" : soon ? "#fbbf24" : "#a78bfa";
       const dueLabel = !hasDates ? s.note || "Manually pinned \u2014 no transactions found" : s.possiblyEnded ? `Possibly cancelled \u2014 last paid ${s.daysSince}d ago` : overdue ? `Overdue by ${Math.abs(s.daysUntil)} day${Math.abs(s.daysUntil) === 1 ? "" : "s"}` : s.daysUntil === 0 ? "Due today" : `Due in ${s.daysUntil} day${s.daysUntil === 1 ? "" : "s"}`;
       const lastLabel = !hasDates ? "" : s.daysSince === 0 ? "Paid today" : `Paid ${s.daysSince}d ago`;
-      return /* @__PURE__ */ React.createElement("div", { key: s.name + i, style: { padding: "10px 14px", borderBottom: i < subs.length - 1 ? "1px solid #1c1f2e" : "none", opacity: s.possiblyEnded ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: hasDates ? dotColor : "transparent", border: hasDates ? "none" : "2px solid #a78bfa" } }), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.possiblyEnded ? "line-through" : "none", color: s.possiblyEnded ? "#4b5563" : "#e2e4ec" } }, pName(s.name, pseudo)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#4b5563", marginRight: 8 } }, s.frequency), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: s.possiblyEnded ? "#4b5563" : "#a78bfa" } }, fmt(pAmt(s.amount, pseudo))), s.pinned && /* @__PURE__ */ React.createElement("button", { onClick: () => setPinnedSubs((prev) => prev.filter((p) => p.name !== s.name)), style: { background: "none", border: "none", color: "#4b5563", fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, paddingLeft: 15 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, lastLabel, s.lastPaid ? ` \xB7 ${s.lastPaid}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: dotColor } }, dueLabel)));
+      return /* @__PURE__ */ React.createElement("div", { key: s.name + i, style: { padding: "10px 14px", borderBottom: i < subs.length - 1 ? "1px solid #1c1f2e" : "none", opacity: s.possiblyEnded ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: hasDates ? dotColor : "transparent", border: hasDates ? "none" : "2px solid #a78bfa" } }), !pseudo.on && (() => {
+        const k = merchantKey(s.name || "");
+        if (MERCHANT_EMOJIS[k]) return /* @__PURE__ */ React.createElement("span", { style: { fontSize: 15, lineHeight: 1, flexShrink: 0 } }, MERCHANT_EMOJIS[k]);
+        if (merchantLogoMap[k]) return /* @__PURE__ */ React.createElement("img", { src: merchantLogoMap[k], alt: "", style: { width: 16, height: 16, borderRadius: 3, objectFit: "contain", flexShrink: 0 }, onError: (e) => {
+          e.target.style.display = "none";
+        } });
+        return null;
+      })(), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: s.possiblyEnded ? "line-through" : "none", color: s.possiblyEnded ? "#4b5563" : "#e2e4ec" } }, pName(s.name, pseudo)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#4b5563", marginRight: 8 } }, s.frequency), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: s.possiblyEnded ? "#4b5563" : "#a78bfa" } }, fmt(pAmt(s.amount, pseudo))), s.pinned && /* @__PURE__ */ React.createElement("button", { onClick: () => setPinnedSubs((prev) => prev.filter((p) => p.name !== s.name)), style: { background: "none", border: "none", color: "#4b5563", fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1 } }, "\u2715")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 4, paddingLeft: 15 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, lastLabel, s.lastPaid ? ` \xB7 ${s.lastPaid}` : ""), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: dotColor } }, dueLabel)));
     })), showSubs && subs.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4b5563" } }, "No subscriptions detected \u2014 use + Add to pin one manually.")), /* @__PURE__ */ React.createElement(SectionLabel, null, periodLabel(displayPeriod), comparePeriod ? ` vs ${periodLabel(comparePeriod)}` : " breakdown"), /* @__PURE__ */ React.createElement("div", { style: { background: "#0f1117", border: "1px solid #f8717140", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#94a3b8", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" } }, "Total Spend"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 26, fontWeight: 700, color: "#f87171" } }, fmt(pAmt(filteredTotal, pseudo)))), allCats.map((cat) => {
       const a = filteredSpend[cat] || 0, b = filteredCmpSpend[cat] || 0, delta = a - b;
       const isOpen = expandedCat === cat;
@@ -2461,9 +2483,14 @@ root.render(React.createElement(App));
             onClick: () => setExpandedMerchant(isMOpen ? null : mKey),
             style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px 8px 28px", cursor: "pointer", background: isMOpen ? "#111318" : "transparent" }
           },
-          merchantLogoMap[merchantKey(merchant)] && !pseudo.on && /* @__PURE__ */ React.createElement("img", { src: merchantLogoMap[merchantKey(merchant)], alt: "", style: { width: 18, height: 18, borderRadius: 3, objectFit: "contain", flexShrink: 0 }, onError: (e) => {
-            e.target.style.display = "none";
-          } }),
+          !pseudo.on && (() => {
+            const k = merchantKey(merchant);
+            if (MERCHANT_EMOJIS[k]) return /* @__PURE__ */ React.createElement("span", { style: { fontSize: 15, lineHeight: 1, flexShrink: 0, marginRight: 6 } }, MERCHANT_EMOJIS[k]);
+            if (merchantLogoMap[k]) return /* @__PURE__ */ React.createElement("img", { src: merchantLogoMap[k], alt: "", style: { width: 18, height: 18, borderRadius: 3, objectFit: "contain", flexShrink: 0, marginRight: 6 }, onError: (e) => {
+              e.target.style.display = "none";
+            } });
+            return null;
+          })(),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: isMOpen ? "#e2e4ec" : "#94a3b8", fontWeight: isMOpen ? 700 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 } }, pName(merchant, pseudo)),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: CAT_COLORS[cat] || "#94a3b8", flexShrink: 0, marginRight: 6 } }, fmt(pAmt(total, pseudo))),
           /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#4b5563" } }, isMOpen ? "\u25B2" : "\u25BC")

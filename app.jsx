@@ -1897,6 +1897,20 @@ function merchantKey(name) {
     .trim();
 }
 
+// Merchants where the inferred domain gives a wrong logo — map to a better one.
+const LOGO_DOMAIN_OVERRIDES = {
+  "spar": "spar-international.com",
+};
+
+// Non-brand merchant types shown as an emoji instead of a favicon.
+const MERCHANT_EMOJIS = {
+  "cashmachine":  "🏧",
+  "cashwithdrawal": "🏧",
+  "cashpoint":    "🏧",
+  "atmwithdrawal": "🏧",
+  "atm":          "🏧",
+};
+
 function detectSubscriptions(allTxns) {
   const today = new Date(todayStr());
   const spending = allTxns.filter(t => t.amount < 0 && !EXCLUDE_FROM_SPEND.includes(t.category || "Other"));
@@ -2010,6 +2024,8 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
     (allTransactions||[]).forEach(t => {
       const k = merchantKey(t.description||"");
       if (map[k]) return;
+      if (MERCHANT_EMOJIS[k]) return; // rendered as emoji, not img
+      if (LOGO_DOMAIN_OVERRIDES[k]) { map[k] = `https://www.google.com/s2/favicons?domain=${LOGO_DOMAIN_OVERRIDES[k]}&sz=64`; return; }
       if (t.logo) { map[k] = t.logo; return; }
       const url = merchantNameToLogoUrl(t.description||"");
       if (url) map[k] = url;
@@ -2242,6 +2258,12 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                 <div key={s.name+i} style={{padding:"10px 14px",borderBottom:i<subs.length-1?"1px solid #1c1f2e":"none",opacity:s.possiblyEnded?0.5:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:hasDates?dotColor:"transparent",border:hasDates?"none":"2px solid #a78bfa"}}/>
+                    {!pseudo.on && (()=>{
+                      const k=merchantKey(s.name||"");
+                      if (MERCHANT_EMOJIS[k]) return <span style={{fontSize:15,lineHeight:1,flexShrink:0}}>{MERCHANT_EMOJIS[k]}</span>;
+                      if (merchantLogoMap[k]) return <img src={merchantLogoMap[k]} alt="" style={{width:16,height:16,borderRadius:3,objectFit:"contain",flexShrink:0}} onError={e=>{e.target.style.display="none"}}/>;
+                      return null;
+                    })()}
                     <span style={{fontSize:13,fontWeight:700,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:s.possiblyEnded?"line-through":"none",color:s.possiblyEnded?"#4b5563":"#e2e4ec"}}>{pName(s.name,pseudo)}</span>
                     <span style={{fontSize:11,color:"#4b5563",marginRight:8}}>{s.frequency}</span>
                     <span style={{fontSize:14,fontWeight:700,color:s.possiblyEnded?"#4b5563":"#a78bfa"}}>{fmt(pAmt(s.amount,pseudo))}</span>
@@ -2290,9 +2312,12 @@ function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod
                       <div key={merchant} style={{borderBottom:i<merchants.length-1?"1px solid #1c1f2e":"none"}}>
                         <div onClick={()=>setExpandedMerchant(isMOpen?null:mKey)}
                           style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 14px 8px 28px",cursor:"pointer",background:isMOpen?"#111318":"transparent"}}>
-                          {merchantLogoMap[merchantKey(merchant)] && !pseudo.on && (
-                            <img src={merchantLogoMap[merchantKey(merchant)]} alt="" style={{width:18,height:18,borderRadius:3,objectFit:"contain",flexShrink:0}} onError={e=>{e.target.style.display="none"}}/>
-                          )}
+                          {!pseudo.on && (()=>{
+                            const k=merchantKey(merchant);
+                            if (MERCHANT_EMOJIS[k]) return <span style={{fontSize:15,lineHeight:1,flexShrink:0,marginRight:6}}>{MERCHANT_EMOJIS[k]}</span>;
+                            if (merchantLogoMap[k]) return <img src={merchantLogoMap[k]} alt="" style={{width:18,height:18,borderRadius:3,objectFit:"contain",flexShrink:0,marginRight:6}} onError={e=>{e.target.style.display="none"}}/>;
+                            return null;
+                          })()}
                           <span style={{fontSize:12,color:isMOpen?"#e2e4ec":"#94a3b8",fontWeight:isMOpen?700:400,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{pName(merchant,pseudo)}</span>
                           <span style={{fontSize:13,fontWeight:700,color:CAT_COLORS[cat]||"#94a3b8",flexShrink:0,marginRight:6}}>{fmt(pAmt(total,pseudo))}</span>
                           <span style={{fontSize:10,color:"#4b5563"}}>{isMOpen?"▲":"▼"}</span>
