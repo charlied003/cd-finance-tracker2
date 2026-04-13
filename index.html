@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.24</title>
+<title>Finance Tracker v3.25</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.24";
+  const APP_VERSION = "3.25";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -416,7 +416,6 @@ amount = price per single item.` }
   const MONZO_CONFIG_KEY = "finance-tracker-monzo-config";
   const STARLING_TOKEN_KEY = "finance-tracker-starling-token";
   const STARLING_PROXY_KEY = "finance-tracker-starling-proxy";
-  const MERCHANT_LOGOS_KEY = "finance-tracker-merchant-logos-v3";
   const DEV_SERVICES_KEY = "finance-tracker-dev-services";
   const AI_SCAN_COUNT_KEY = "finance-tracker-ai-scans";
   const MONZO_ACCESS_KEY = "finance-tracker-monzo-access";
@@ -609,17 +608,6 @@ amount = price per single item.` }
       return `https://logo.clearbit.com/${firstToken}`;
     const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
     return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
-  }
-  function buildLogoMap(txns, existingLogos) {
-    const out = {};
-    txns.forEach((t) => {
-      const k = merchantKey(t.description || "");
-      if (!existingLogos[k] && !out[k]) {
-        const url = merchantNameToLogoUrl(t.description || "");
-        if (url) out[k] = url;
-      }
-    });
-    return out;
   }
   function starlingToInternal(item, idx) {
     var _a;
@@ -949,13 +937,6 @@ ${clean}` }]
         return {};
       }
     });
-    const [merchantLogos, setMerchantLogos] = useState(() => {
-      try {
-        return JSON.parse(localStorage.getItem(MERCHANT_LOGOS_KEY) || "{}");
-      } catch (e) {
-        return {};
-      }
-    });
     const [gmailModal, setGmailModal] = useState(null);
     const [devServices, setDevServices] = useState(() => {
       try {
@@ -1103,18 +1084,6 @@ ${clean}` }]
       } catch (e) {
       }
     }, [senderMap]);
-    useEffect(() => {
-      try {
-        localStorage.setItem(MERCHANT_LOGOS_KEY, JSON.stringify(merchantLogos));
-      } catch (e) {
-      }
-    }, [merchantLogos]);
-    useEffect(() => {
-      if (!transactions.length) return;
-      const starlingTxns = applyRules(transactions.filter((t) => t.accountId === "main"));
-      const newLogos = buildLogoMap(starlingTxns, merchantLogos);
-      if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
-    }, [transactions.length]);
     useEffect(() => {
       if (!syncReady.current || !gistToken) return;
       setSyncStatus("syncing");
@@ -1384,8 +1353,6 @@ root.render(React.createElement(App));
             })
           );
           showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-          const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
-          if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
         } catch (e) {
           showToast(e.message, "error");
         } finally {
@@ -1438,8 +1405,6 @@ root.render(React.createElement(App));
                       return ((_a2 = b.rowIndex) != null ? _a2 : 0) - ((_b2 = a.rowIndex) != null ? _b2 : 0);
                     })
                   );
-                  const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
-                  if (Object.keys(newLogos).length) setMerchantLogos((prev) => __spreadValues(__spreadValues({}, prev), newLogos));
                 }
               }
             } catch (e) {
@@ -1719,8 +1684,7 @@ root.render(React.createElement(App));
         onAddReceipt: (txId) => setReceiptModal({ step: "upload", pinnedTxId: txId }),
         allTransactions: applyRules(transactions.filter((t) => activeAccounts.includes(t.accountId))),
         pinnedSubs,
-        setPinnedSubs,
-        merchantLogos
+        setPinnedSubs
       }
     ), view === "transactions" && /* @__PURE__ */ React.createElement(
       TxList,
@@ -2259,18 +2223,22 @@ root.render(React.createElement(App));
     });
     return out;
   }
-  function SpendView({ spending, compareSpend, totalSpend, displayPeriod, comparePeriod, visibleTxns, compareTxns, periodLabel, receipts, onAddReceipt, allTransactions, pinnedSubs, setPinnedSubs, merchantLogos }) {
+  function SpendView({ spending, compareSpend, totalSpend, displayPeriod, comparePeriod, visibleTxns, compareTxns, periodLabel, receipts, onAddReceipt, allTransactions, pinnedSubs, setPinnedSubs }) {
     const pseudo = useContext(PseudoCtx);
     const merchantLogoMap = useMemo(() => {
-      const map = __spreadValues({}, merchantLogos || {});
+      const map = {};
       (allTransactions || []).forEach((t) => {
+        const k = merchantKey(t.description || "");
+        if (map[k]) return;
         if (t.logo) {
-          const k = merchantKey(t.description || "");
-          if (!map[k]) map[k] = t.logo;
+          map[k] = t.logo;
+          return;
         }
+        const url = merchantNameToLogoUrl(t.description || "");
+        if (url) map[k] = url;
       });
       return map;
-    }, [allTransactions, merchantLogos]);
+    }, [allTransactions]);
     const [expandedCat, setExpandedCat] = useState(null);
     const [expandedMerchant, setExpandedMerchant] = useState(null);
     const [showSubs, setShowSubs] = useState(true);

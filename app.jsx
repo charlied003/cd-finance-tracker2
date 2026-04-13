@@ -766,7 +766,6 @@ export default function App() {
   const [gmailSyncing, setGmailSyncing]     = useState(false);
   const [gmailProgress, setGmailProgress]   = useState({ current: 0, total: 0 });
   const [senderMap, setSenderMap]           = useState(() => { try { return JSON.parse(localStorage.getItem(GMAIL_SENDER_MAP_KEY)||"{}"); } catch { return {}; } });
-  const [merchantLogos, setMerchantLogos]   = useState(() => { try { return JSON.parse(localStorage.getItem(MERCHANT_LOGOS_KEY)||"{}"); } catch { return {}; } });
   const [gmailModal, setGmailModal]         = useState(null);
   const [devServices, setDevServices]       = useState(() => {
     try {
@@ -906,19 +905,6 @@ const DEFAULT_RULES = {
     try { localStorage.setItem(GMAIL_SENDER_MAP_KEY, JSON.stringify(senderMap)); } catch {}
   }, [senderMap]);
 
-  useEffect(() => {
-    try { localStorage.setItem(MERCHANT_LOGOS_KEY, JSON.stringify(merchantLogos)); } catch {}
-  }, [merchantLogos]);
-
-  // Background logo enrichment: on load, build Clearbit URLs for all Starling merchant names.
-  // Synchronous — no API calls. Browser onError hides any Clearbit misses silently.
-  useEffect(() => {
-    if (!transactions.length) return;
-    const starlingTxns = applyRules(transactions.filter(t => t.accountId === "main"));
-    const newLogos = buildLogoMap(starlingTxns, merchantLogos);
-    if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions.length]);
 
   // Debounced Gist sync — fires 2s after any change to syncable data
   useEffect(() => {
@@ -1163,8 +1149,6 @@ root.render(React.createElement(App));
         [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
       );
       showToast(`Synced ${fresh.length} new transaction${fresh.length === 1 ? "" : "s"} from Starling`);
-      const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
-      if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
     } catch(e) {
       showToast(e.message, "error");
     } finally {
@@ -1213,8 +1197,6 @@ root.render(React.createElement(App));
               setTransactions(prev =>
                 [...prev, ...fresh].sort((a, b) => { if (b.date !== a.date) return b.date > a.date ? 1 : -1; return (b.rowIndex ?? 0) - (a.rowIndex ?? 0); })
               );
-              const newLogos = buildLogoMap(applyRules(fresh), merchantLogos);
-              if (Object.keys(newLogos).length) setMerchantLogos(prev => ({ ...prev, ...newLogos }));
             }
           }
         } catch(e) {
@@ -1469,7 +1451,7 @@ root.render(React.createElement(App));
               setComparePeriod={setComparePeriod} visibleTxns={visibleTxns} compareTxns={compareTxns} periodLabel={periodLabel}
               receipts={receipts} onAddReceipt={(txId)=>setReceiptModal({step:"upload",pinnedTxId:txId})}
               allTransactions={applyRules(transactions.filter(t => activeAccounts.includes(t.accountId)))}
-              pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} merchantLogos={merchantLogos} />}
+              pinnedSubs={pinnedSubs} setPinnedSubs={setPinnedSubs} />}
             {view==="transactions" && <TxList
               txns={visibleTxns} accounts={accounts}
               onCatChange={(id,cat)=>setTransactions(prev=>prev.map(t=>t.id===id?{...t,category:cat}:t))}
@@ -2016,15 +1998,23 @@ function spendFromTxns(txns) {
 }
 
 // ─── Spend View ───────────────────────────────────────────────────────────────
-function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs,merchantLogos}) {
+function SpendView({spending,compareSpend,totalSpend,displayPeriod,comparePeriod,visibleTxns,compareTxns,periodLabel,receipts,onAddReceipt,allTransactions,pinnedSubs,setPinnedSubs}) {
   const pseudo = useContext(PseudoCtx);
+  // Build logo map directly from transactions — no state/prop chain needed.
+  // Monzo transactions carry a direct logo URL on t.logo.
+  // For everything else, derive a Clearbit URL from the display name.
+  // The browser's onError silently hides any Clearbit misses.
   const merchantLogoMap = useMemo(() => {
-    const map = { ...(merchantLogos||{}) }; // Starling logos keyed by merchantKey
+    const map = {};
     (allTransactions||[]).forEach(t => {
-      if (t.logo) { const k = merchantKey(t.description||""); if (!map[k]) map[k] = t.logo; } // Monzo logos
+      const k = merchantKey(t.description||"");
+      if (map[k]) return;
+      if (t.logo) { map[k] = t.logo; return; }
+      const url = merchantNameToLogoUrl(t.description||"");
+      if (url) map[k] = url;
     });
     return map;
-  }, [allTransactions, merchantLogos]);
+  }, [allTransactions]);
   const [expandedCat, setExpandedCat]           = useState(null);
   const [expandedMerchant, setExpandedMerchant] = useState(null);
   const [showSubs, setShowSubs]                 = useState(true);
