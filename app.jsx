@@ -480,6 +480,18 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
+async function starlingFetchSavingsGoals(token, accountUid, proxyBase) {
+  const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
+  try {
+    const res = await fetch(`${base}/account/${accountUid}/savings-goals`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+    });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return j.savingsGoalList || [];
+  } catch { return []; }
+}
+
 // Derive a Google favicon URL from a merchant display name — no API call needed.
 // "AMAZON.CO.UK" → favicons?domain=amazon.co.uk  |  "Tesco" → favicons?domain=tesco.com
 // Google's favicon service (s2/favicons) is free, reliable, and returns images for all real brands.
@@ -1137,6 +1149,13 @@ root.render(React.createElement(App));
         const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
         setManualBalances(prev => ({ ...prev, main: liveBal }));
       }
+      // Savings pot balance
+      const goals = await starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
+      const easySaver = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
+      if (easySaver) {
+        const potBal = (easySaver.totalSaved?.minorUnits || 0) / 100;
+        setManualBalances(prev => ({ ...prev, savings: potBal }));
+      }
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
       const since = lastDate
@@ -1174,6 +1193,10 @@ root.render(React.createElement(App));
             const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
             setManualBalances(prev => ({ ...prev, main: liveBal }));
           }
+          // Savings pot balance
+          const goals = await starlingFetchSavingsGoals(starlingToken, accountUid, starlingProxy);
+          const easySaver = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
+          if (easySaver) setManualBalances(prev => ({ ...prev, savings: (easySaver.totalSaved?.minorUnits || 0) / 100 }));
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate
@@ -1406,7 +1429,7 @@ root.render(React.createElement(App));
         </div>
 
         <div style={{display:"flex",gap:2}}>
-          {[["dashboard","Overview"],["spend","Spending"],["transactions","Transactions"],["insights","Insights"],["receipts","Receipts"]].map(([v,l])=>(
+          {[["dashboard","Overview"],["spend","Spending"],["transactions","Txns"],["savings","Savings"],["insights","Insights"],["receipts","Receipts"]].map(([v,l])=>(
             <button key={v} onClick={()=>setView(v)} style={{
               background:view===v?"#60a5fa":"transparent",color:view===v?"#0a0b0f":"#4b5563",
               border:"none",borderRadius:"6px 6px 0 0",padding:"8px 16px",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:1,textTransform:"uppercase",
@@ -1416,7 +1439,7 @@ root.render(React.createElement(App));
       </div>
 
       <div style={{padding:"16px",maxWidth:640,margin:"0 auto"}}>
-        {periods.length>0&&(
+        {periods.length>0&&view!=="savings"&&(
           <div style={{marginBottom:16}}>
             <div style={{fontSize:9,color:"#4b5563",letterSpacing:3,textTransform:"uppercase",marginBottom:6}}>Pay period · starts {ordinal(cycleStart)} of each month</div>
             <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4,scrollbarWidth:"none"}}>
@@ -1471,6 +1494,9 @@ root.render(React.createElement(App));
                 localStorage.setItem(GMAIL_PROCESSED_KEY, JSON.stringify(kept));
                 showToast(`Reset scan history — ${saved.size} confirmed receipt${saved.size===1?"":"s"} preserved`);
               }} />}
+            {view==="savings" && <SavingsView
+              transactions={transactions} manualBalances={manualBalances}
+              starlingToken={starlingToken} bankSyncing={bankSyncing} onSync={syncStarling} />}
             {view==="insights" && <InsightsView
               transactions={transactions} periods={periods} activeAccounts={activeAccounts}
               cycleStart={cycleStart} periodLabel={periodLabel} displayPeriod={displayPeriod}
@@ -3096,6 +3122,181 @@ function AddAccountModal({onSave,onClose}) {
   );
 }
 
+
+// ─── Savings View ─────────────────────────────────────────────────────────────
+function SavingsView({ transactions, manualBalances, starlingToken, bankSyncing, onSync }) {
+  const pseudo = useContext(PseudoCtx);
+
+  // All savings pot movements tagged on the main account
+  const savingsTxns = useMemo(() =>
+    transactions
+      .filter(t => t.accountId === "main" && (t.category === "Savings" || t.category === "SavingsReturn"))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [transactions]
+  );
+
+  const currentBalance = manualBalances["savings"] ?? null;
+
+  // Reconstruct pot balance history by working backwards from current balance
+  const balanceHistory = useMemo(() => {
+    const bal0 = currentBalance ?? 0;
+    let bal = bal0;
+    const sorted = [...savingsTxns].sort((a, b) => b.date.localeCompare(a.date)); // newest first
+    const points = [{ date: todayStr(), balance: bal }];
+    sorted.forEach(t => {
+      bal = t.category === "Savings"
+        ? bal - Math.abs(t.amount)   // before this deposit, pot had less
+        : bal + Math.abs(t.amount);  // before this withdrawal, pot had more
+      points.push({ date: t.date, balance: Math.max(0, bal) });
+    });
+    return points.reverse(); // oldest → newest
+  }, [savingsTxns, currentBalance]);
+
+  // Monthly net change — last 6 calendar months
+  const monthlyData = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const monthly = savingsTxns.filter(t => t.date.startsWith(key));
+      const added = monthly.filter(t => t.category === "Savings").reduce((s, t) => s + Math.abs(t.amount), 0);
+      const withdrawn = monthly.filter(t => t.category === "SavingsReturn").reduce((s, t) => s + Math.abs(t.amount), 0);
+      return { key, label: MONTH_NAMES[d.getMonth()], added, withdrawn, net: added - withdrawn };
+    });
+  }, [savingsTxns]);
+
+  const maxNetAbs = Math.max(...monthlyData.map(d => Math.abs(d.net)), 1);
+
+  // SVG line chart geometry
+  const W = 320, H = 110, PL = 10, PR = 10, PT = 10, PB = 22;
+  const cW = W - PL - PR, cH = H - PT - PB;
+
+  const { svgPoints, polylineStr, minBal, maxBal } = useMemo(() => {
+    if (balanceHistory.length < 2) return { svgPoints: [], polylineStr: "", minBal: 0, maxBal: 0 };
+    const vals = balanceHistory.map(p => p.balance);
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals, minV + 1);
+    const n = balanceHistory.length;
+    const pts = balanceHistory.map((p, i) => ({
+      x: PL + (i / (n - 1)) * cW,
+      y: PT + (1 - (p.balance - minV) / (maxV - minV)) * cH,
+      balance: p.balance,
+      date: p.date,
+    }));
+    return { svgPoints: pts, polylineStr: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "), minBal: minV, maxBal: maxV };
+  }, [balanceHistory]);
+
+  return (
+    <div>
+      <SectionLabel>Easy Saver — Starling</SectionLabel>
+
+      {/* Balance card */}
+      <div style={{background:"#0f1117",border:"1px solid #fbbf2440",borderRadius:10,padding:"20px",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:10,color:"#4b5563",letterSpacing:2,textTransform:"uppercase",marginBottom:6}}>Current Balance</div>
+            <div style={{fontSize:40,fontWeight:700,color:"#fbbf24",letterSpacing:-1,lineHeight:1}}>
+              {currentBalance !== null ? fmt(pAmt(currentBalance, pseudo)) : "—"}
+            </div>
+          </div>
+          {starlingToken && (
+            <button onClick={onSync} disabled={bankSyncing} style={{background:"transparent",border:"1px solid #2a2d3e",borderRadius:6,color:bankSyncing?"#4b5563":"#60a5fa",fontSize:11,padding:"6px 12px",cursor:bankSyncing?"default":"pointer",fontFamily:"inherit",letterSpacing:1,marginTop:4}}>
+              {bankSyncing ? "Syncing…" : "↻ Sync"}
+            </button>
+          )}
+        </div>
+        {!starlingToken && <div style={{fontSize:11,color:"#4b5563",marginTop:8}}>Add your Starling token in Settings to sync the balance</div>}
+      </div>
+
+      {/* Balance line chart */}
+      {svgPoints.length >= 2 && (
+        <>
+          <SectionLabel>Balance History</SectionLabel>
+          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"12px 16px",marginBottom:16}}>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}}>
+              {/* Subtle grid */}
+              {[0.25,0.5,0.75].map(f => (
+                <line key={f} x1={PL} x2={W-PR} y1={PT+f*cH} y2={PT+f*cH} stroke="#1c1f2e" strokeWidth="1"/>
+              ))}
+              {/* Area fill */}
+              <polygon
+                points={`${PL},${PT+cH} ${polylineStr} ${W-PR},${PT+cH}`}
+                fill="#fbbf2412"
+              />
+              {/* Line */}
+              <polyline points={polylineStr} fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+              {/* Current balance dot */}
+              <circle cx={svgPoints[svgPoints.length-1].x} cy={svgPoints[svgPoints.length-1].y} r="4" fill="#fbbf24"/>
+              {/* Labels */}
+              <text x={PL} y={H-2} fontSize="8" fill="#4b5563">{balanceHistory[0]?.date?.slice(0,7)}</text>
+              <text x={W-PR} y={H-2} fontSize="8" fill="#4b5563" textAnchor="end">{balanceHistory[balanceHistory.length-1]?.date?.slice(0,7)}</text>
+              <text x={PL+2} y={PT+cH-2} fontSize="8" fill="#4b5563">{fmt(pAmt(minBal,pseudo))}</text>
+              <text x={PL+2} y={PT+10} fontSize="8" fill="#fbbf24">{fmt(pAmt(maxBal,pseudo))}</text>
+            </svg>
+          </div>
+        </>
+      )}
+
+      {/* Monthly net change bar chart */}
+      <SectionLabel>Monthly Net Change — last 6 months</SectionLabel>
+      <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,padding:"16px",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-end",gap:6,height:100}}>
+          {monthlyData.map(d => {
+            const isPos = d.net >= 0;
+            const barH = Math.max((Math.abs(d.net) / maxNetAbs) * 72, d.net !== 0 ? 3 : 0);
+            return (
+              <div key={d.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <div style={{fontSize:8,color:isPos?"#4ade80":"#f87171",fontWeight:700,minHeight:12,textAlign:"center",lineHeight:1.2}}>
+                  {d.net !== 0 ? (isPos?"+":"-") + fmt(pAmt(Math.abs(d.net), pseudo)) : ""}
+                </div>
+                <div style={{width:"100%",borderRadius:"4px 4px 0 0",background:isPos?"#4ade80":"#f87171",height:`${barH}px`,transition:"height .4s"}}/>
+                <div style={{fontSize:8,color:"#4b5563",textAlign:"center"}}>{d.label}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:12,paddingTop:8,borderTop:"1px solid #1c1f2e"}}>
+          <div>
+            <div style={{fontSize:9,color:"#4b5563",letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Added (6 mo)</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#4ade80"}}>+{fmt(pAmt(monthlyData.reduce((s,d)=>s+d.added,0),pseudo))}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:9,color:"#4b5563",letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Withdrawn (6 mo)</div>
+            <div style={{fontSize:14,fontWeight:700,color:"#f87171"}}>{fmt(pAmt(monthlyData.reduce((s,d)=>s+d.withdrawn,0),pseudo))}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Recent movements list */}
+      {savingsTxns.length > 0 && (
+        <>
+          <SectionLabel>Savings Movements</SectionLabel>
+          <div style={{background:"#0f1117",border:"1px solid #1c1f2e",borderRadius:10,overflow:"hidden",marginBottom:16}}>
+            {[...savingsTxns].reverse().slice(0, 15).map((t, i, arr) => (
+              <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderBottom:i<arr.length-1?"1px solid #1c1f2e":"none"}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#e2e4ec"}}>{t.category==="Savings"?"Transfer to pot":"Transfer from pot"}</div>
+                  <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>{t.date}</div>
+                </div>
+                <div style={{fontSize:14,fontWeight:700,color:t.category==="Savings"?"#4ade80":"#f87171"}}>
+                  {t.category==="Savings"?"+":"-"}{fmt(pAmt(Math.abs(t.amount),pseudo))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {savingsTxns.length === 0 && currentBalance === null && (
+        <div style={{textAlign:"center",padding:"40px 0"}}>
+          <div style={{fontSize:48,marginBottom:12}}>🏦</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#94a3b8"}}>No savings data yet</div>
+          <div style={{fontSize:12,color:"#4b5563",marginTop:6,lineHeight:1.6}}>Sync Starling or import a CSV<br/>to see your Easy Saver balance and history</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Insights View ────────────────────────────────────────────────────────────
 function InsightsView({transactions, periods, activeAccounts, cycleStart, periodLabel, displayPeriod, merchantRules}) {
