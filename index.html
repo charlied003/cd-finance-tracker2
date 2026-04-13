@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.25</title>
+<title>Finance Tracker v3.26</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.25";
+  const APP_VERSION = "3.26";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
@@ -605,9 +605,9 @@ amount = price per single item.` }
     const lower = name.toLowerCase().trim();
     const firstToken = lower.split(/\s+/)[0];
     if (/^[a-z0-9][a-z0-9-]+\.[a-z]{2,}(\.[a-z]{2})?$/.test(firstToken))
-      return `https://logo.clearbit.com/${firstToken}`;
+      return `https://www.google.com/s2/favicons?domain=${firstToken}&sz=64`;
     const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
-    return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
+    return word.length > 2 ? `https://www.google.com/s2/favicons?domain=${word}.com&sz=64` : null;
   }
   function starlingToInternal(item, idx) {
     var _a;

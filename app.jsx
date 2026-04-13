@@ -480,18 +480,19 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
-// Derive a Clearbit logo URL from a merchant display name — no API call needed.
-// "AMAZON.CO.UK" → clearbit/amazon.co.uk  |  "Tesco" → clearbit/tesco.com
+// Derive a Google favicon URL from a merchant display name — no API call needed.
+// "AMAZON.CO.UK" → favicons?domain=amazon.co.uk  |  "Tesco" → favicons?domain=tesco.com
+// Google's favicon service (s2/favicons) is free, reliable, and returns images for all real brands.
 function merchantNameToLogoUrl(name) {
   if (!name) return null;
   const lower = name.toLowerCase().trim();
   const firstToken = lower.split(/\s+/)[0];
   // If first word already looks like a domain (e.g. "amazon.co.uk"), use it directly
   if (/^[a-z0-9][a-z0-9-]+\.[a-z]{2,}(\.[a-z]{2})?$/.test(firstToken))
-    return `https://logo.clearbit.com/${firstToken}`;
+    return `https://www.google.com/s2/favicons?domain=${firstToken}&sz=64`;
   // Otherwise strip non-alpha and use first word as company name → guess .com
   const word = lower.replace(/[^a-z0-9]/g, " ").trim().split(/\s+/)[0];
-  return word.length > 2 ? `https://logo.clearbit.com/${word}.com` : null;
+  return word.length > 2 ? `https://www.google.com/s2/favicons?domain=${word}.com&sz=64` : null;
 }
 
 // Build a logo map for a batch of transactions not already in the cache.
