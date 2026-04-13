@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.36</title>
+<title>Finance Tracker v3.37</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.36";
+  const APP_VERSION = "3.37";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -602,10 +602,22 @@ amount = price per single item.` }
   }
   function starlingFetchSavingsBalance(token, primaryAccountUid, proxyBase) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d, _e, _f, _g;
+      var _a, _b, _c;
       const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
       const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
       const lines = [];
+      function extractBalance(bd) {
+        var _a2, _b2, _c2, _d, _e;
+        const candidates = [
+          (_a2 = bd.effectiveBalance) == null ? void 0 : _a2.minorUnits,
+          (_b2 = bd.clearedBalance) == null ? void 0 : _b2.minorUnits,
+          (_c2 = bd.totalEffectiveBalance) == null ? void 0 : _c2.minorUnits,
+          (_d = bd.totalClearedBalance) == null ? void 0 : _d.minorUnits,
+          (_e = bd.amount) == null ? void 0 : _e.minorUnits
+        ];
+        const val = candidates.find((v) => v != null && v > 0);
+        return val != null ? val / 100 : 0;
+      }
       try {
         const r = yield fetch(`${base}/accounts`, { headers: hdr });
         if (r.ok) {
@@ -618,7 +630,7 @@ amount = price per single item.` }
               const br = yield fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
               if (br.ok) {
                 const bd = yield br.json();
-                const v = ((_d = (_c = (_a = bd.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = bd.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
+                const v = extractBalance(bd);
                 lines.push(`${acc.accountType}:\xA3${v.toFixed(2)}`);
                 if (v > 0) return { balance: v, source: acc.accountType, debug: lines.join(" | ") };
               } else {
@@ -644,7 +656,7 @@ amount = price per single item.` }
             return `${g.name}=\xA3${((((_a2 = g.totalSaved) == null ? void 0 : _a2.minorUnits) || 0) / 100).toFixed(0)}`;
           }).join(",") || "none"}`);
           for (const g of goals) {
-            const v = (((_e = g.totalSaved) == null ? void 0 : _e.minorUnits) || 0) / 100;
+            const v = (((_a = g.totalSaved) == null ? void 0 : _a.minorUnits) || 0) / 100;
             if (v > 0) return { balance: v, source: `goal "${g.name}"`, debug: lines.join(" | ") };
           }
         } else {
@@ -663,7 +675,7 @@ amount = price per single item.` }
             return `${s.name}=\xA3${((((_a2 = s.totalSaved || s.balance) == null ? void 0 : _a2.minorUnits) || 0) / 100).toFixed(0)}`;
           }).join(",") || "none"}`);
           for (const s of all) {
-            const v = (((_f = s.totalSaved) == null ? void 0 : _f.minorUnits) || ((_g = s.balance) == null ? void 0 : _g.minorUnits) || 0) / 100;
+            const v = (((_b = s.totalSaved) == null ? void 0 : _b.minorUnits) || ((_c = s.balance) == null ? void 0 : _c.minorUnits) || 0) / 100;
             if (v > 0) return { balance: v, source: `space "${s.name}"`, debug: lines.join(" | ") };
           }
         } else {

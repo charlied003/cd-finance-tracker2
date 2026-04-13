@@ -495,6 +495,20 @@ async function starlingFetchSavingsBalance(token, primaryAccountUid, proxyBase) 
   const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
   const lines = []; // debug log
 
+  // Helper: extract any non-zero amount from a Starling balance response object
+  function extractBalance(bd) {
+    // Try every known field — savings accounts use different fields than current accounts
+    const candidates = [
+      bd.effectiveBalance?.minorUnits,
+      bd.clearedBalance?.minorUnits,
+      bd.totalEffectiveBalance?.minorUnits,
+      bd.totalClearedBalance?.minorUnits,
+      bd.amount?.minorUnits,
+    ];
+    const val = candidates.find(v => v != null && v > 0);
+    return val != null ? val / 100 : 0;
+  }
+
   // Step 1: list all accounts, try balance on every non-primary one
   try {
     const r = await fetch(`${base}/accounts`, { headers: hdr });
@@ -508,7 +522,7 @@ async function starlingFetchSavingsBalance(token, primaryAccountUid, proxyBase) 
           const br = await fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
           if (br.ok) {
             const bd = await br.json();
-            const v = (bd.effectiveBalance?.minorUnits ?? bd.clearedBalance?.minorUnits ?? 0) / 100;
+            const v = extractBalance(bd);
             lines.push(`${acc.accountType}:£${v.toFixed(2)}`);
             if (v > 0) return { balance: v, source: acc.accountType, debug: lines.join(" | ") };
           } else {
