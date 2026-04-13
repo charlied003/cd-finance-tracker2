@@ -490,27 +490,25 @@ async function starlingFetchTransactions(token, accountUid, categoryUid, since, 
   return j.feedItems || [];
 }
 
-// Fetch Easy Saver balance. Tries three sources in order, returns the first non-zero result:
-//  1. The dedicated savings account from the /accounts list (most accurate)
-//  2. Savings goals API (older Starling Easy Saver products appear here)
-//  3. Spaces API (some Starling accounts use spaces instead of goals)
+// Fetch Easy Saver balance. Returns { balance, source } or { balance: null, source: "not found" }.
+// Tries four sources, returns the first that gives a positive result.
 async function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAccountUid, proxyBase) {
   const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
   const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
 
-  // 1. Separate savings account balance
+  // 1. Separate savings account in /accounts list
   if (savingsAccountUid) {
     try {
       const r = await fetch(`${base}/accounts/${savingsAccountUid}/balance`, { headers: hdr });
       if (r.ok) {
         const d = await r.json();
         const v = (d.effectiveBalance?.minorUnits ?? d.clearedBalance?.minorUnits ?? 0) / 100;
-        if (v > 0) return v;
+        if (v > 0) return { balance: v, source: "savings account" };
       }
     } catch {}
   }
 
-  // 2. Savings goals API
+  // 2. Savings goals API (/account/{uid}/savings-goals)
   try {
     const r = await fetch(`${base}/account/${primaryAccountUid}/savings-goals`, { headers: hdr });
     if (r.ok) {
@@ -519,23 +517,43 @@ async function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAcco
       const best = goals.find(g => /easy saver/i.test(g.name)) || goals[0];
       if (best) {
         const v = (best.totalSaved?.minorUnits || 0) / 100;
-        if (v > 0) return v;
+        if (v > 0) return { balance: v, source: `savings goal "${best.name}"` };
       }
     }
   } catch {}
 
-  // 3. Spaces API
+  // 3. Spaces API (/account/{uid}/spaces)
   try {
     const r = await fetch(`${base}/account/${primaryAccountUid}/spaces`, { headers: hdr });
     if (r.ok) {
       const d = await r.json();
-      const spaces = [...(d.savingsGoals || []), ...(d.savingsSpaces || [])];
-      const total = spaces.reduce((s, sp) => s + (sp.totalSaved?.minorUnits || sp.balance?.minorUnits || 0), 0) / 100;
-      if (total > 0) return total;
+      const all = [...(d.savingsGoals || []), ...(d.savingsSpaces || [])];
+      const best = all.find(sp => /easy saver/i.test(sp.name)) || all[0];
+      if (best) {
+        const v = (best.totalSaved?.minorUnits || best.balance?.minorUnits || 0) / 100;
+        if (v > 0) return { balance: v, source: `space "${best.name}"` };
+      }
     }
   } catch {}
 
-  return null; // couldn't determine — don't overwrite stored value
+  // 4. Re-fetch all accounts and try each non-primary one (catches different account orderings)
+  try {
+    const r = await fetch(`${base}/accounts`, { headers: hdr });
+    if (r.ok) {
+      const d = await r.json();
+      const others = (d.accounts || []).filter(a => a.accountUid !== primaryAccountUid);
+      for (const acc of others) {
+        const br = await fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
+        if (br.ok) {
+          const bd = await br.json();
+          const v = (bd.effectiveBalance?.minorUnits ?? bd.clearedBalance?.minorUnits ?? 0) / 100;
+          if (v > 0) return { balance: v, source: `account "${acc.name||acc.accountType}" (${acc.accountType})` };
+        }
+      }
+    }
+  } catch {}
+
+  return { balance: null, source: "not found" };
 }
 
 // Derive a Google favicon URL from a merchant display name — no API call needed.
@@ -1195,9 +1213,14 @@ root.render(React.createElement(App));
         const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
         setManualBalances(prev => ({ ...prev, main: liveBal }));
       }
-      // Easy Saver balance — tries account balance, savings goals, and spaces in order
-      const savBal = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
-      if (savBal !== null) setManualBalances(prev => ({ ...prev, savings: savBal }));
+      // Easy Saver balance — tries four sources, toasts result for debugging
+      const savResult = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+      if (savResult.balance !== null) {
+        setManualBalances(prev => ({ ...prev, savings: savResult.balance }));
+        showToast(`Easy Saver: £${savResult.balance.toFixed(2)} (via ${savResult.source})`);
+      } else {
+        showToast(`Easy Saver balance not found — check token has savings:read scope`, "error");
+      }
       const existing = transactions.filter(t => t.accountId === "main");
       const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
       const since = lastDate
@@ -1235,9 +1258,10 @@ root.render(React.createElement(App));
             const liveBal = (balData.effectiveBalance?.minorUnits ?? balData.clearedBalance?.minorUnits ?? 0) / 100;
             setManualBalances(prev => ({ ...prev, main: liveBal }));
           }
-          // Easy Saver balance — tries account balance, savings goals, and spaces in order
-          const savBal = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
-          if (savBal !== null) setManualBalances(prev => ({ ...prev, savings: savBal }));
+          // Easy Saver balance — tries four sources
+          const savResult = await starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+          if (savResult.balance !== null) setManualBalances(prev => ({ ...prev, savings: savResult.balance }));
+          console.log("[Starling] savings balance:", savResult);
           const existing = transactions.filter(t => t.accountId === "main");
           const lastDate = existing.sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
           const since = lastDate

@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.34</title>
+<title>Finance Tracker v3.35</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,7 +103,7 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.34";
+  const APP_VERSION = "3.35";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
   const PSEUDO_NAME_OVERRIDES = {
@@ -603,7 +603,7 @@ amount = price per single item.` }
   }
   function starlingFetchSavingsBalance(token, savingsAccountUid, primaryAccountUid, proxyBase) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d, _e;
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
       const base = proxyBase ? proxyBase.replace(/\/$/, "") : "https://api.starlingbank.com/api/v2";
       const hdr = { Authorization: `Bearer ${token}`, Accept: "application/json" };
       if (savingsAccountUid) {
@@ -612,7 +612,7 @@ amount = price per single item.` }
           if (r.ok) {
             const d = yield r.json();
             const v = ((_d = (_c = (_a = d.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = d.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
-            if (v > 0) return v;
+            if (v > 0) return { balance: v, source: "savings account" };
           }
         } catch (e) {
         }
@@ -625,7 +625,7 @@ amount = price per single item.` }
           const best = goals.find((g) => /easy saver/i.test(g.name)) || goals[0];
           if (best) {
             const v = (((_e = best.totalSaved) == null ? void 0 : _e.minorUnits) || 0) / 100;
-            if (v > 0) return v;
+            if (v > 0) return { balance: v, source: `savings goal "${best.name}"` };
           }
         }
       } catch (e) {
@@ -634,16 +634,32 @@ amount = price per single item.` }
         const r = yield fetch(`${base}/account/${primaryAccountUid}/spaces`, { headers: hdr });
         if (r.ok) {
           const d = yield r.json();
-          const spaces = [...d.savingsGoals || [], ...d.savingsSpaces || []];
-          const total = spaces.reduce((s, sp) => {
-            var _a2, _b2;
-            return s + (((_a2 = sp.totalSaved) == null ? void 0 : _a2.minorUnits) || ((_b2 = sp.balance) == null ? void 0 : _b2.minorUnits) || 0);
-          }, 0) / 100;
-          if (total > 0) return total;
+          const all = [...d.savingsGoals || [], ...d.savingsSpaces || []];
+          const best = all.find((sp) => /easy saver/i.test(sp.name)) || all[0];
+          if (best) {
+            const v = (((_f = best.totalSaved) == null ? void 0 : _f.minorUnits) || ((_g = best.balance) == null ? void 0 : _g.minorUnits) || 0) / 100;
+            if (v > 0) return { balance: v, source: `space "${best.name}"` };
+          }
         }
       } catch (e) {
       }
-      return null;
+      try {
+        const r = yield fetch(`${base}/accounts`, { headers: hdr });
+        if (r.ok) {
+          const d = yield r.json();
+          const others = (d.accounts || []).filter((a) => a.accountUid !== primaryAccountUid);
+          for (const acc of others) {
+            const br = yield fetch(`${base}/accounts/${acc.accountUid}/balance`, { headers: hdr });
+            if (br.ok) {
+              const bd = yield br.json();
+              const v = ((_k = (_j = (_h = bd.effectiveBalance) == null ? void 0 : _h.minorUnits) != null ? _j : (_i = bd.clearedBalance) == null ? void 0 : _i.minorUnits) != null ? _k : 0) / 100;
+              if (v > 0) return { balance: v, source: `account "${acc.name || acc.accountType}" (${acc.accountType})` };
+            }
+          }
+        }
+      } catch (e) {
+      }
+      return { balance: null, source: "not found" };
     });
   }
   function merchantNameToLogoUrl(name) {
@@ -1381,8 +1397,13 @@ root.render(React.createElement(App));
             const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
             setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
           }
-          const savBal = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
-          if (savBal !== null) setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
+          const savResult = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+          if (savResult.balance !== null) {
+            setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savResult.balance }));
+            showToast(`Easy Saver: \xA3${savResult.balance.toFixed(2)} (via ${savResult.source})`);
+          } else {
+            showToast(`Easy Saver balance not found \u2014 check token has savings:read scope`, "error");
+          }
           const existing = transactions.filter((t) => t.accountId === "main");
           const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
           const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
@@ -1427,8 +1448,9 @@ root.render(React.createElement(App));
                 const liveBal = ((_d = (_c = (_a = balData.effectiveBalance) == null ? void 0 : _a.minorUnits) != null ? _c : (_b = balData.clearedBalance) == null ? void 0 : _b.minorUnits) != null ? _d : 0) / 100;
                 setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { main: liveBal }));
               }
-              const savBal = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
-              if (savBal !== null) setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savBal }));
+              const savResult = yield starlingFetchSavingsBalance(starlingToken, savingsAccountUid, accountUid, starlingProxy);
+              if (savResult.balance !== null) setManualBalances((prev) => __spreadProps(__spreadValues({}, prev), { savings: savResult.balance }));
+              console.log("[Starling] savings balance:", savResult);
               const existing = transactions.filter((t) => t.accountId === "main");
               const lastDate = (_e = existing.sort((a, b) => b.date.localeCompare(a.date))[0]) == null ? void 0 : _e.date;
               const since = lastDate ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1e3).toISOString() : new Date(Date.now() - 180 * 24 * 60 * 60 * 1e3).toISOString();
