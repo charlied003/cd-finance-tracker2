@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Finance">
-<title>Finance Tracker v3.29</title>
+<title>Finance Tracker v3.30</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>window.MONZO_CONFIG = null; // config.js not found — Monzo OAuth disabled</script>
@@ -103,22 +103,21 @@ input,textarea,button{font-family:inherit;}
     Transfer: "#6b7280",
     Other: "#4b5563"
   };
-  const APP_VERSION = "3.29";
+  const APP_VERSION = "3.30";
   const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const PseudoCtx = React.createContext({ on: false, factor: 1 });
-  const PSEUDO_NAMES = ["Meridian", "Harborside", "Lakewood", "Pinecrest", "Westfield", "Northgate", "Clearwater", "Elmwood", "Riverside", "Oakdale", "Mapleton", "Birchwood", "Cedargate", "Hillcrest", "Brookside", "Millgate", "Sycamore", "Fairview", "Greenhill", "Stonegate", "Copperfield", "Whitmore", "Ashford", "Redwood", "Fernwood", "Glenbrook", "Silvergate", "Thornfield", "Wyndham", "Bramblewood"];
-  function _pseudoHash(s) {
-    let h = 0;
-    for (let i = 0; i < (s || "").length; i++) h = h * 31 + s.charCodeAt(i) & 65535;
-    return h;
-  }
+  const PSEUDO_NAME_OVERRIDES = {
+    "manual men's health": "Supplement Order",
+    "manual": "Supplement Order"
+  };
   function pAmt(x, ctx) {
     if (!ctx.on) return x;
     return Math.round(Math.abs(x) * ctx.factor * (x < 0 ? -1 : 1) * 100) / 100;
   }
   function pName(s, ctx) {
     if (!ctx.on || !s) return s;
-    return PSEUDO_NAMES[_pseudoHash(s) % PSEUDO_NAMES.length];
+    const key = s.toLowerCase().trim();
+    return PSEUDO_NAME_OVERRIDES[key] || s;
   }
   const STORAGE_KEY = "finance-tracker-v5";
   const DEFAULT_CYCLE_START = 25;

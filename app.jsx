@@ -31,10 +31,17 @@ const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct"
 // Factor is randomised each time demo mode is toggled on (passed via context alongside the bool).
 // Range 0.3–0.55 keeps amounts clearly smaller than real; nobody can reverse-engineer the multiplier.
 const PseudoCtx = React.createContext({ on: false, factor: 1 });
-const PSEUDO_NAMES = ["Meridian","Harborside","Lakewood","Pinecrest","Westfield","Northgate","Clearwater","Elmwood","Riverside","Oakdale","Mapleton","Birchwood","Cedargate","Hillcrest","Brookside","Millgate","Sycamore","Fairview","Greenhill","Stonegate","Copperfield","Whitmore","Ashford","Redwood","Fernwood","Glenbrook","Silvergate","Thornfield","Wyndham","Bramblewood"];
-function _pseudoHash(s) { let h=0; for(let i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))&0xffff; return h; }
+// Names to discreetly replace in demo mode — everything else keeps its real name.
+const PSEUDO_NAME_OVERRIDES = {
+  "manual men's health": "Supplement Order",
+  "manual":              "Supplement Order",
+};
 function pAmt(x, ctx) { if (!ctx.on) return x; return Math.round(Math.abs(x)*ctx.factor*(x<0?-1:1)*100)/100; }
-function pName(s, ctx) { if (!ctx.on || !s) return s; return PSEUDO_NAMES[_pseudoHash(s)%PSEUDO_NAMES.length]; }
+function pName(s, ctx) {
+  if (!ctx.on || !s) return s;
+  const key = s.toLowerCase().trim();
+  return PSEUDO_NAME_OVERRIDES[key] || s;
+}
 const STORAGE_KEY = "finance-tracker-v5";
 const DEFAULT_CYCLE_START = 25;
 const EXCLUDE_FROM_SPEND  = ["Savings","SavingsReturn","Transfer"];
